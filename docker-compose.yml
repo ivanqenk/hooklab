@@ -1,0 +1,40 @@
+# Entorno local: solo las dependencias.
+# La aplicación corre en el venv del host para iterar rápido (recarga en caliente
+# sin reconstruir imagen). El Dockerfile de la app llega en la fase 6, con el deploy.
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hooklab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hooklab}
+      POSTGRES_DB: ${POSTGRES_DB:-hooklab}
+    ports:
+      - "5432:5432"
+    volumes:
+      # OJO: Postgres 18+ cambió la convención. Antes se montaba en
+      # /var/lib/postgresql/data; ahora el montaje va en el directorio PADRE y la
+      # imagen coloca los datos en un subdirectorio por versión mayor. Montar en
+      # /data hace que el contenedor se niegue a arrancar.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hooklab}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Entorno — NUNCA versionar secretos
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Datos locales de contenedores
+postgres-data/
+redis-data/
+
+# Editor / SO
+.vscode/
+.idea/
+*.swp
+.DS_Store

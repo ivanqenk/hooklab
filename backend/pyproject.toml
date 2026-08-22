@@ -1,0 +1,57 @@
+[project]
+name = "hooklab"
+version = "0.1.0"
+description = "Gateway de webhooks para desarrollo: recibe, verifica y reenvía"
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi>=0.141,<1.0",
+    "uvicorn[standard]>=0.52,<1.0",
+    "sqlalchemy[asyncio]>=2.0.52,<2.1",
+    "psycopg[binary,pool]>=3.3,<4.0",
+    "alembic>=1.19,<2.0",
+    "pydantic-settings>=2.15,<3.0",
+    "redis>=5.3,<7.0",
+    "arq>=0.28,<1.0",
+    "python-multipart>=0.0.32",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "pytest-asyncio>=1.4",
+    "httpx>=0.28",
+    "ruff>=0.9",
+    "mypy>=1.14",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F: errores y pyflakes · I: orden de imports · UP: modernizar sintaxis
+# B: bugs frecuentes (flake8-bugbear) · S: seguridad (bandit) · ASYNC: fallos async
+select = ["E", "F", "I", "UP", "B", "S", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # assert es normal en tests
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+# Estricto en lo que aporta, sin pelear con el tipado desde el día uno.
+warn_unused_configs = true
+disallow_untyped_defs = true
+warn_return_any = true
+warn_redundant_casts = true
