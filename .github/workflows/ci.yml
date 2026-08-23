@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Si llegan varios push seguidos, cancela los anteriores: no tiene sentido gastar
+# minutos verificando un commit que ya quedó superado.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  calidad:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 es el mínimo declarado en pyproject: probarlo evita que se cuele
+        # sintaxis más nueva sin darnos cuenta. 3.14 es lo que se usa en local.
+        python: ["3.12", "3.14"]
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: hooklab
+          POSTGRES_PASSWORD: hooklab
+          POSTGRES_DB: hooklab
+        ports:
+          - 5432:5432
+        # Sin healthcheck, los pasos arrancan cuando el contenedor existe, no
+        # cuando Postgres acepta conexiones: fallos intermitentes garantizados.
+        options: >-
+          --health-cmd "pg_isready -U hooklab"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # En CI no hay archivo .env; pydantic-settings toma estas variables del
+      # entorno directamente. La clave es de usar y tirar, no es un secreto.
+      DATABASE_URL: postgresql+psycopg://hooklab:hooklab@localhost:5432/hooklab
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: clave-efimera-solo-para-ci
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Linter
+        run: ruff check app/ tests/
+
+      - name: Formato
+        run: ruff format --check app/ tests/
+
+      - name: Tipos
+        run: mypy app/ tests/
+
+      - name: Pruebas
+        run: pytest -v

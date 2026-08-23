@@ -22,7 +22,7 @@ Gateway de webhooks para desarrollo. Generas una URL pública y cada petición q
 
 ## 2. Dónde estamos exactamente
 
-**Último commit: `ea33efe` — HL-1.** Rama `main`, sincronizada con el remoto.
+**Último commit: `HL-3`.** Rama `main`, sincronizada con el remoto.
 
 ### Funciona y está verificado
 
@@ -31,11 +31,13 @@ Gateway de webhooks para desarrollo. Generas una URL pública y cada petición q
 - Conexión asíncrona a Postgres (SQLAlchemy 2 + psycopg3) y a Redis (modo bytes).
 - `/health` y `/ready`, probados **también en fallo**: con Redis caído, `/health` sigue en 200 y
   `/ready` devuelve 503 identificando qué dependencia falló; al volver Redis se recupera solo.
-- `ruff` y `mypy` en verde.
+- Suite de 3 pruebas contra servicios reales, vía `ASGITransport` (sin abrir puerto).
+- CI en GitHub Actions: matriz de Python 3.12 y 3.14, con Postgres y Redis como servicios,
+  ejecutando `ruff`, `ruff format --check`, `mypy` y `pytest`.
 
-### Falta todo lo demás
+### Falta
 
-CI, despliegue, y la aplicación en sí: ingesta, SSE, firmas, reenvío, frontend.
+Despliegue, y la aplicación en sí: ingesta, SSE, firmas, reenvío, frontend.
 
 ---
 
@@ -101,16 +103,17 @@ Se analizaron a fondo y están justificadas en el plan. Reabrirlas cuesta tiempo
 
 ## 6. Lo siguiente
 
-**Decisión pendiente**, planteada y sin responder:
+**Siguiente: HL-4 — la ingesta.** Es la fase 1 del plan y la primera funcionalidad real:
 
-- **Opción A — HL-2 = CI.** Workflow de GitHub Actions con Postgres y Redis como servicios,
-  corriendo `ruff`, `mypy` y `pytest`. Cierra la fase 5. Todavía no hay pruebas, pero montar la
-  tubería ahora hace que crezca con el código.
-- **Opción B — HL-2 = ingesta.** Ir directo a la parte divertida: crear endpoint, capturar
-  peticiones, listarlas. Al terminarla el proyecto ya es útil con `curl`.
+1. Modelo de datos `endpoints` y `requests` (el SQL está en el plan), con migración de Alembic.
+2. Endpoint para crear un endpoint de captura, que devuelve `ingest_token` y `view_token`.
+3. Ruta de ingesta catch-all: `/in/{token}/{path:path}`, todos los métodos, cuerpo crudo con
+   límite de 1 MB y truncado explícito.
+4. Listado y detalle de peticiones capturadas.
 
-Después de eso, el orden del plan es: tiempo real (Streams + SSE) → firmas → entrega confiable →
-frontend → cuentas.
+Al terminarla el proyecto ya es útil con `curl`, sin necesidad de frontend.
+
+Después: tiempo real (Streams + SSE) → firmas → entrega confiable → frontend → cuentas.
 
 ---
 
