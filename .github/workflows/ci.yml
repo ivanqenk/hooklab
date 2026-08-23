@@ -82,5 +82,11 @@ jobs:
       - name: Tipos
         run: mypy app/ tests/
 
+      # La base del runner arranca vacía. Sin este paso, cualquier prueba que
+      # toque una tabla falla en CI mientras funciona en local, que es el tipo
+      # de discrepancia más molesta de diagnosticar.
+      - name: Migraciones
+        run: alembic upgrade head
+
       - name: Pruebas
         run: pytest -v
