@@ -1,5 +1,7 @@
 # Hooklab
 
+[![CI](https://github.com/ivanqenk/hooklab/actions/workflows/ci.yml/badge.svg)](https://github.com/ivanqenk/hooklab/actions/workflows/ci.yml)
+
 **Gateway de webhooks para desarrollo: recibe, verifica y reenvía.**
 
 Cuando integras Stripe, GitHub o cualquier proveedor que mande webhooks, te topas con tres
