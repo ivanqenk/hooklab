@@ -22,7 +22,8 @@ Gateway de webhooks para desarrollo. Generas una URL pública y cada petición q
 
 ## 2. Dónde estamos exactamente
 
-**Último commit: `HL-6`.** Rama `main` sincronizada, CI en verde.
+**Último commit: `HL-10`.** Rama `main` sincronizada, CI en verde.
+**La fase 1 está completa: Hooklab ya es utilizable con `curl`, sin frontend.**
 
 | Commit | Contenido |
 |---|---|
@@ -32,6 +33,9 @@ Gateway de webhooks para desarrollo. Generas una URL pública y cada petición q
 | HL-4 | Badge de CI |
 | HL-5 | Modelo de datos `endpoints` y `requests`, con Alembic |
 | HL-6 | API de creación y consulta de endpoints; código pasado a inglés |
+| HL-7, HL-8 | Actualización de este documento |
+| HL-9 | Ruta de ingesta: captura cualquier petición en `/in/{ingest_token}` |
+| HL-10 | Listado, detalle y descarga del cuerpo de las capturas |
 
 ### Funciona y está verificado
 
@@ -39,15 +43,17 @@ Gateway de webhooks para desarrollo. Generas una URL pública y cada petición q
 - Configuración validada al arrancar; conexiones asíncronas a ambos.
 - `/health` y `/ready`, probados **también en fallo**: con Redis caído, `/health` sigue en 200 y
   `/ready` da 503 diciendo qué dependencia falló; al volver Redis se recupera solo.
-- `POST /api/endpoints` y `GET /api/endpoints/{view_token}`.
+- **Flujo completo**: crear endpoint → recibir webhooks de cualquier método y content-type →
+  listarlos paginados → ver el detalle → descargar el cuerpo crudo.
 - Migración aplicada, con reversión probada en una ida y vuelta completa.
-- 13 pruebas contra servicios reales, con aislamiento por `TRUNCATE` entre cada una.
+- 43 pruebas contra servicios reales, con aislamiento por `TRUNCATE` entre cada una.
 - CI: matriz Python 3.12 y 3.14, con Postgres y Redis como servicios, corriendo `ruff`,
   `ruff format --check`, `mypy`, migraciones y `pytest`.
+- Verificado también a mano con `curl` contra el servidor real.
 
 ### Falta
 
-La ingesta (lo siguiente), tiempo real con SSE, firmas, reenvío, frontend y despliegue.
+Tiempo real con SSE, firmas, reenvío, frontend y despliegue.
 
 ---
 
@@ -103,6 +109,15 @@ Cosas que ya costaron tiempo una vez. No hay que volver a tropezar con ellas.
 - **Tres esquemas por recurso** (Create / Created / Public). `Created` es la única respuesta que
   lleva `view_token`; como `Public` no tiene el campo, filtrarlo es imposible por construcción.
 - **404 y no 403** ante un token inválido: un 403 confirmaría que el token existe.
+- **Paginación por cursor, no por offset.** Con offset, una captura que llega mientras el usuario
+  pagina repite una fila y se salta otra. Se pide una fila de más para saber si hay página
+  siguiente, en lugar de un `COUNT` sobre toda la tabla.
+- **El cuerpo crudo nunca se sirve con su content-type original**: siempre `octet-stream`,
+  `attachment` y `nosniff`. Devolver `text/html` elegido por un desconocido convertiría el dominio
+  en alojamiento de malware.
+- **El control de acceso vive en una dependencia** (`EndpointDep`), no repetido en cada ruta: así
+  no se puede olvidar.
+- **El límite de cuerpo se aplica mientras se lee el flujo**, nunca después de cargarlo en memoria.
 - **Cuerpo guardado crudo en `bytea`.** El HMAC de las firmas se calcula sobre los bytes exactos.
 - **Anónimo primero**, endpoints reclamables. OAuth2 llega después.
 - **Control de acceso por capacidad** (tokens), no RLS.
@@ -119,25 +134,20 @@ Cosas que ya costaron tiempo una vez. No hay que volver a tropezar con ellas.
 
 ---
 
-## 6. Lo siguiente — la ruta de ingesta
+## 6. Lo siguiente — fase 2: tiempo real
 
-Es el corazón de la fase 1. Captura cualquier petición que llegue a `/in/{ingest_token}`.
+Es **el núcleo técnico del proyecto** y lo que lo separa de un CRUD.
 
-1. **Ruta catch-all**: `/in/{token}/{path:path}`, con todos los métodos
-   (`GET POST PUT PATCH DELETE HEAD OPTIONS`).
-2. **Cuerpo crudo con límite de 1 MB**, y el detalle que importa: **el límite se aplica mientras se
-   lee el flujo**, abortando al superarlo. Si se lee entero y luego se mide, un cuerpo de 500 MB
-   tumba el proceso — que es exactamente lo que busca un atacante.
-3. Guardar cabeceras, query, IP de origen, content-type y tiempos.
-4. `body_json` solo cuando el content-type lo justifica y el parseo no falla.
-5. Responder rápido: los proveedores tienen timeouts cortos y reintentan si tardas.
-6. Incrementar `request_count` del endpoint.
+1. **Publicar en un Redis Stream** al ingerir: `XADD ep:{endpoint_id}` con `MAXLEN ~ 1000`.
+2. **Endpoint SSE** `GET /api/endpoints/{view_token}/stream`, leyendo con `XREAD BLOCK`.
+3. **Reconexión con `Last-Event-ID`**: el navegador dice "vengo del 4711" y se le entrega lo que
+   faltó. El `bigserial` de `requests` ya sirve tal cual como ese identificador.
+4. **La prueba que valida toda la arquitectura**: levantar uvicorn con `--workers 4`, abrir el SSE y
+   mandar 20 peticiones con `curl`. Deben aparecer **las 20**. Sin bus compartido aparecen solo las
+   que cayeron en el worker correcto — y con un solo worker el bug no se manifiesta, que es
+   justamente lo que lo hace traicionero. Va documentada en el README.
 
-Luego **5d**: listar y ver las peticiones capturadas. Al terminar eso, el proyecto ya es útil con
-`curl`, sin frontend.
-
-Después, el orden del plan: tiempo real (Streams + SSE) → firmas → entrega confiable → frontend →
-cuentas.
+Después: firmas → entrega confiable → frontend → cuentas.
 
 ### Duda pendiente
 
