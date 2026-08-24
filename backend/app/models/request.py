@@ -22,7 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 
-class Request(Base):
+class CapturedRequest(Base):
     """An HTTP request captured exactly as it arrived.
 
     About the body: it is ALWAYS stored raw (`body_raw`), and a parsed copy

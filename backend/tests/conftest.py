@@ -5,9 +5,10 @@ from collections.abc import AsyncIterator
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.db import engine
+from app.core.db import SessionLocal, engine
 from app.main import app
 
 
@@ -51,3 +52,15 @@ async def client() -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest.fixture
+async def db() -> AsyncIterator[AsyncSession]:
+    """Direct database session, for asserting on what was actually stored.
+
+    The listing API does not exist yet, and even once it does, checking the rows
+    themselves is the stronger assertion: it catches a field that is persisted
+    wrongly but happens to be hidden by the serialisation layer.
+    """
+    async with SessionLocal() as session:
+        yield session

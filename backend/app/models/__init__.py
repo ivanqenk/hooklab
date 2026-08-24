@@ -7,6 +7,6 @@ is simply not registered there.
 
 from app.models.base import Base
 from app.models.endpoint import Endpoint
-from app.models.request import Request
+from app.models.request import CapturedRequest
 
-__all__ = ["Base", "Endpoint", "Request"]
+__all__ = ["Base", "CapturedRequest", "Endpoint"]
