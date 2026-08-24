@@ -1,7 +1,7 @@
 # Contexto de sesión — Hooklab
 
 Documento para retomar el proyecto sin releer toda la conversación anterior.
-**Última actualización: 2026-08-21.**
+**Última actualización: 2026-08-24.**
 
 ---
 
@@ -22,22 +22,32 @@ Gateway de webhooks para desarrollo. Generas una URL pública y cada petición q
 
 ## 2. Dónde estamos exactamente
 
-**Último commit: `HL-3`.** Rama `main`, sincronizada con el remoto.
+**Último commit: `HL-6`.** Rama `main` sincronizada, CI en verde.
+
+| Commit | Contenido |
+|---|---|
+| HL-1 | Entorno local con Docker, esqueleto FastAPI, `/health` y `/ready` |
+| HL-2 | Este documento de contexto |
+| HL-3 | Primeras pruebas y CI en GitHub Actions |
+| HL-4 | Badge de CI |
+| HL-5 | Modelo de datos `endpoints` y `requests`, con Alembic |
+| HL-6 | API de creación y consulta de endpoints; código pasado a inglés |
 
 ### Funciona y está verificado
 
-- Postgres 18.6 y Redis 8 en Docker, ambos con healthcheck.
-- Configuración leída y validada del entorno al arrancar.
-- Conexión asíncrona a Postgres (SQLAlchemy 2 + psycopg3) y a Redis (modo bytes).
+- Postgres 18.6 y Redis 8 en Docker, con healthcheck.
+- Configuración validada al arrancar; conexiones asíncronas a ambos.
 - `/health` y `/ready`, probados **también en fallo**: con Redis caído, `/health` sigue en 200 y
-  `/ready` devuelve 503 identificando qué dependencia falló; al volver Redis se recupera solo.
-- Suite de 3 pruebas contra servicios reales, vía `ASGITransport` (sin abrir puerto).
-- CI en GitHub Actions: matriz de Python 3.12 y 3.14, con Postgres y Redis como servicios,
-  ejecutando `ruff`, `ruff format --check`, `mypy` y `pytest`.
+  `/ready` da 503 diciendo qué dependencia falló; al volver Redis se recupera solo.
+- `POST /api/endpoints` y `GET /api/endpoints/{view_token}`.
+- Migración aplicada, con reversión probada en una ida y vuelta completa.
+- 13 pruebas contra servicios reales, con aislamiento por `TRUNCATE` entre cada una.
+- CI: matriz Python 3.12 y 3.14, con Postgres y Redis como servicios, corriendo `ruff`,
+  `ruff format --check`, `mypy`, migraciones y `pytest`.
 
 ### Falta
 
-Despliegue, y la aplicación en sí: ingesta, SSE, firmas, reenvío, frontend.
+La ingesta (lo siguiente), tiempo real con SSE, firmas, reenvío, frontend y despliegue.
 
 ---
 
@@ -45,17 +55,24 @@ Despliegue, y la aplicación en sí: ingesta, SSE, firmas, reenvío, frontend.
 
 ```bash
 cd ~/learning/python/proyecto
-
 docker compose up -d --wait          # Postgres + Redis
 
 cd backend
+.venv/bin/alembic upgrade head       # por si hay migraciones nuevas
 .venv/bin/uvicorn app.main:app --port 8010 --reload
 
-# comprobar
 curl http://localhost:8010/ready     # {"status":"ready","checks":{...}}
 ```
 
-Calidad: `.venv/bin/ruff check app/` · `.venv/bin/mypy app/`
+Antes de cada commit, correr **exactamente lo que corre el CI**:
+
+```bash
+cd backend
+.venv/bin/ruff check app/ tests/
+.venv/bin/ruff format --check app/ tests/
+.venv/bin/mypy app/ tests/
+.venv/bin/pytest -q
+```
 
 ---
 
@@ -66,54 +83,66 @@ Cosas que ya costaron tiempo una vez. No hay que volver a tropezar con ellas.
 | Detalle | Qué saber |
 |---|---|
 | **Puerto 8010, no 8000** | El 8000 lo ocupa otro proyecto del usuario (`~/learning/python/fastapi`, `users:app`). No matarlo. |
-| **Volumen de Postgres 18** | Se monta en `/var/lib/postgresql`, **no** en `/var/lib/postgresql/data`. La versión 18 cambió la convención; con la ruta vieja el contenedor no arranca. Casi todos los tutoriales están desactualizados. |
+| **Volumen de Postgres 18** | Se monta en `/var/lib/postgresql`, **no** en `/var/lib/postgresql/data`. La 18 cambió la convención; con la ruta vieja el contenedor no arranca. Casi todos los tutoriales están desactualizados. |
 | **mypy + pydantic-settings** | `Settings()` sin argumentos da error `call-arg`. Resuelto con un `type: ignore` estrecho y comentado en `config.py`. **No** dar valores por defecto a las variables obligatorias: que falten debe romper el arranque. |
-| **Python 3.14** | Todas las dependencias tienen wheels. Se eligió psycopg3 sobre asyncpg por disponibilidad. |
-| **Docker en WSL** | Ya funciona sin `sudo`. |
-| **git** | Identidad global: `ivanqenk` / `ivanqenk@gmail.com`. Llave SSH ed25519 registrada en GitHub. |
+| **ruff B008 + FastAPI** | `Depends()` en valores por defecto dispara B008. No se silencia: se usan alias `Annotated` en `app/api/deps.py`, que es el estilo moderno de FastAPI. |
+| **Python 3.14** | Todas las dependencias tienen wheels. psycopg3 elegido sobre asyncpg por disponibilidad. |
+| **git** | Identidad global `ivanqenk` / `ivanqenk@gmail.com`. Llave SSH ed25519 en `~/.ssh/id_ed25519`, registrada en GitHub. |
 
 ---
 
 ## 5. Decisiones cerradas — no reabrir
 
-Se analizaron a fondo y están justificadas en el plan. Reabrirlas cuesta tiempo sin aportar nada.
-
-- **Redis Streams, no pub/sub**, para el fan-out del SSE. Streams resuelve nativamente el hueco de
-  reconexión vía `Last-Event-ID`.
+- **Código en inglés** (clases, funciones, variables, columnas, docstrings, comentarios).
+  La conversación con el usuario sigue en **español mexicano**.
+- **Commits prefijados `HL-N`.** El siguiente es HL-7.
+- **Redis Streams, no pub/sub**, para el fan-out del SSE.
 - **El `bigserial` de `requests` es el `Last-Event-ID`.** Sin tabla de cursores.
 - **Dos tokens separados**: `ingest_token` público, `view_token` secreto.
-- **Cuerpo guardado crudo en `bytea`.** Los webhooks mandan XML y binario, y el HMAC se calcula
-  sobre los bytes exactos.
+- **Tres esquemas por recurso** (Create / Created / Public). `Created` es la única respuesta que
+  lleva `view_token`; como `Public` no tiene el campo, filtrarlo es imposible por construcción.
+- **404 y no 403** ante un token inválido: un 403 confirmaría que el token existe.
+- **Cuerpo guardado crudo en `bytea`.** El HMAC de las firmas se calcula sobre los bytes exactos.
 - **Anónimo primero**, endpoints reclamables. OAuth2 llega después.
-- **Control de acceso por capacidad** (tokens), no RLS. Workspaces con RLS mucho más adelante.
-- **Reenvío confiable y verificación de firmas van en el núcleo**, no en una v2 hipotética: ahí
-  está la ingeniería difícil y el único camino a monetizar.
+- **Control de acceso por capacidad** (tokens), no RLS.
+- **Reenvío confiable y verificación de firmas van en el núcleo**, no en una v2 hipotética.
 - **Despliegue en VPS con Docker Compose y Caddy**, ~6 USD/mes. El SSE de larga duración descarta
   las plataformas serverless.
-- **Commits prefijados `HL-N`.** El siguiente es HL-2.
 
 ### Ideas descartadas — no volver a proponerlas
 
-- **Acredia** (cumplimiento de contratistas en México): dependencia regulatoria, incumbentes que
-  lo venden empaquetado, y responsabilidad legal si el software se equivoca.
-- **App de Shopify**: buen negocio, mala pieza de portafolio — casi todo pegamento de plataforma
-  y no se puede demostrar sin una tienda.
+- **Acredia** (cumplimiento de contratistas en México): dependencia regulatoria, incumbentes que lo
+  venden empaquetado, y responsabilidad legal si el software se equivoca.
+- **App de Shopify**: buen negocio, mala pieza de portafolio — casi todo pegamento de plataforma y
+  no se puede demostrar sin una tienda.
 
 ---
 
-## 6. Lo siguiente
+## 6. Lo siguiente — HL-7, la ruta de ingesta
 
-**Siguiente: HL-4 — la ingesta.** Es la fase 1 del plan y la primera funcionalidad real:
+Es el corazón de la fase 1. Captura cualquier petición que llegue a `/in/{ingest_token}`.
 
-1. Modelo de datos `endpoints` y `requests` (el SQL está en el plan), con migración de Alembic.
-2. Endpoint para crear un endpoint de captura, que devuelve `ingest_token` y `view_token`.
-3. Ruta de ingesta catch-all: `/in/{token}/{path:path}`, todos los métodos, cuerpo crudo con
-   límite de 1 MB y truncado explícito.
-4. Listado y detalle de peticiones capturadas.
+1. **Ruta catch-all**: `/in/{token}/{path:path}`, con todos los métodos
+   (`GET POST PUT PATCH DELETE HEAD OPTIONS`).
+2. **Cuerpo crudo con límite de 1 MB**, y el detalle que importa: **el límite se aplica mientras se
+   lee el flujo**, abortando al superarlo. Si se lee entero y luego se mide, un cuerpo de 500 MB
+   tumba el proceso — que es exactamente lo que busca un atacante.
+3. Guardar cabeceras, query, IP de origen, content-type y tiempos.
+4. `body_json` solo cuando el content-type lo justifica y el parseo no falla.
+5. Responder rápido: los proveedores tienen timeouts cortos y reintentan si tardas.
+6. Incrementar `request_count` del endpoint.
 
-Al terminarla el proyecto ya es útil con `curl`, sin necesidad de frontend.
+Luego **5d**: listar y ver las peticiones capturadas. Al terminar eso, el proyecto ya es útil con
+`curl`, sin frontend.
 
-Después: tiempo real (Streams + SSE) → firmas → entrega confiable → frontend → cuentas.
+Después, el orden del plan: tiempo real (Streams + SSE) → firmas → entrega confiable → frontend →
+cuentas.
+
+### Duda pendiente
+
+**¿El README y los documentos de `docs/` pasan también a inglés?** La instrucción de escribir en
+inglés se interpretó como código y docstrings. Para un repo de portafolio, un README en inglés
+amplía mucho quién puede leerlo, pero está sin decidir.
 
 ---
 
@@ -121,10 +150,10 @@ Después: tiempo real (Streams + SSE) → firmas → entrega confiable → front
 
 | Documento | Contenido |
 |---|---|
-| `~/.claude/plans/espera-sigamos-analizando-tiene-merry-karp.md` | **El plan completo**: arquitectura con sus 7 decisiones, modelo de amenazas, modelo de datos en SQL, fases y plan de verificación. Es la referencia principal. |
-| `docs/prompt-maestro.md` | Metodología de trabajo: fases, compuertas de aprobación, definición de terminado. |
+| `~/.claude/plans/espera-sigamos-analizando-tiene-merry-karp.md` | **El plan completo**: arquitectura con sus 7 decisiones, modelo de amenazas, modelo de datos en SQL, fases y plan de verificación. Referencia principal. |
+| `docs/prompt-maestro.md` | Metodología: fases, compuertas de aprobación, definición de terminado. |
 | `README.md` | Cara pública del proyecto y puesta en marcha. |
 | Este archivo | Estado y contexto para retomar. |
 
 **Al retomar:** leer este archivo, levantar el entorno (sección 3), confirmar que `/ready`
-responde, y elegir entre las opciones de la sección 6.
+responde, y arrancar con la sección 6.
