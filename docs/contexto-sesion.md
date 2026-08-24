@@ -95,7 +95,8 @@ Cosas que ya costaron tiempo una vez. No hay que volver a tropezar con ellas.
 
 - **Código en inglés** (clases, funciones, variables, columnas, docstrings, comentarios).
   La conversación con el usuario sigue en **español mexicano**.
-- **Commits prefijados `HL-N`.** El siguiente es HL-7.
+- **Commits prefijados `HL-N`.** Para saber cuál sigue, mirar `git log --oneline` y continuar la
+  secuencia — no fiarse de un número escrito aquí, que se desactualiza solo.
 - **Redis Streams, no pub/sub**, para el fan-out del SSE.
 - **El `bigserial` de `requests` es el `Last-Event-ID`.** Sin tabla de cursores.
 - **Dos tokens separados**: `ingest_token` público, `view_token` secreto.
@@ -118,7 +119,7 @@ Cosas que ya costaron tiempo una vez. No hay que volver a tropezar con ellas.
 
 ---
 
-## 6. Lo siguiente — HL-7, la ruta de ingesta
+## 6. Lo siguiente — la ruta de ingesta
 
 Es el corazón de la fase 1. Captura cualquier petición que llegue a `/in/{ingest_token}`.
 
