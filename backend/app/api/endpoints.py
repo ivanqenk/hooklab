@@ -2,10 +2,9 @@
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, status
 
-from app.api.deps import SessionDep, SettingsDep
+from app.api.deps import EndpointDep, SessionDep, SettingsDep
 from app.models import Endpoint
 from app.schemas.endpoint import EndpointCreate, EndpointCreated, EndpointPublic
 
@@ -51,23 +50,13 @@ async def create_endpoint(
 
 
 @router.get("/{view_token}", response_model=EndpointPublic)
-async def get_endpoint(
-    view_token: str,
-    session: SessionDep,
-    settings: SettingsDep,
-) -> EndpointPublic:
+async def get_endpoint(endpoint: EndpointDep, settings: SettingsDep) -> EndpointPublic:
     """Look up an endpoint by its read token.
 
     Access control is capability based: holding the token *is* the authorisation.
-    A missing endpoint answers 404 rather than 403, so that nobody can confirm a
-    given token is valid but merely lacks permission.
+    The lookup and the 404 live in the `EndpointDep` dependency, so every route
+    that reads through a view token gets the same check without repeating it.
     """
-    result = await session.execute(select(Endpoint).where(Endpoint.view_token == view_token))
-    endpoint = result.scalar_one_or_none()
-
-    if endpoint is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
-
     return EndpointPublic(
         id=endpoint.id,
         name=endpoint.name,
