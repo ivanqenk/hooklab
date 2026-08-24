@@ -1,8 +1,8 @@
-"""Configuración de la aplicación, leída del entorno.
+"""Application configuration, read from the environment.
 
-Se lee y valida una sola vez al arrancar. Si falta una variable obligatoria, la
-aplicación falla de inmediato con un mensaje claro, en vez de reventar a media
-petición con un error incomprensible.
+Read and validated once at startup. If a required variable is missing, the app
+fails immediately with a clear message instead of blowing up mid-request with
+something incomprehensible.
 """
 
 from functools import lru_cache
@@ -10,10 +10,10 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Este archivo vive en backend/app/core/, así que la raíz del proyecto está tres
-# niveles arriba. Resolvemos la ruta desde la ubicación del archivo y NO desde el
-# directorio de trabajo: así el .env se encuentra igual si arrancas uvicorn desde
-# backend/, desde la raíz, o desde donde sea.
+# This file lives in backend/app/core/, so the project root is three levels up.
+# The path is resolved from the file's own location and NOT from the working
+# directory, so the .env is found whether uvicorn starts from backend/, from the
+# repository root, or from anywhere else.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -24,18 +24,18 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Entorno ---
+    # --- Environment ---
     app_env: str = "development"
     log_level: str = "INFO"
 
-    # --- Obligatorias ---
-    # Sin valor por defecto a propósito: si faltan, la app no arranca.
+    # --- Required ---
+    # Deliberately without defaults: if they are missing, the app must not start.
     database_url: str
     redis_url: str
     secret_key: str
 
-    # --- Ingesta ---
-    public_ingest_base: str = "http://localhost:8000"
+    # --- Ingest ---
+    public_ingest_base: str = "http://localhost:8010"
     max_body_bytes: int = 1_048_576  # 1 MB
     anon_retention_hours: int = 72
 
@@ -46,13 +46,13 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Devuelve la configuración, leyendo el entorno una sola vez por proceso."""
-    # mypy considera database_url, redis_url y secret_key argumentos obligatorios
-    # del constructor porque no tienen valor por defecto. Sobre la firma estática
-    # tiene razón; sobre el comportamiento real no, porque pydantic-settings los
-    # rellena desde el entorno al instanciar.
+    """Return the settings, reading the environment once per process."""
+    # mypy treats database_url, redis_url and secret_key as required constructor
+    # arguments because they have no defaults. It is right about the static
+    # signature and wrong about the runtime behaviour: pydantic-settings fills
+    # them from the environment on instantiation.
     #
-    # Se ignora SOLO este error y SOLO en esta línea. No les ponemos valor por
-    # defecto a propósito: que sean obligatorios es justo lo que hace que la
-    # aplicación falle al arrancar si falta una variable, en vez de a media petición.
+    # Only this error, and only on this line, is silenced. Giving the fields
+    # defaults would be the wrong fix: being required is exactly what makes the
+    # app fail at startup rather than mid-request.
     return Settings()  # type: ignore[call-arg]

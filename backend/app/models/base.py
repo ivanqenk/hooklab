@@ -1,11 +1,11 @@
-"""Base declarativa compartida por todos los modelos."""
+"""Declarative base shared by every model."""
 
 from sqlalchemy.orm import DeclarativeBase
 
 
 class Base(DeclarativeBase):
-    """Todas las tablas heredan de aquí.
+    """Every table inherits from here.
 
-    Alembic usa `Base.metadata` para detectar cambios en el esquema, así que un
-    modelo que no herede de esta clase será invisible para las migraciones.
+    Alembic uses `Base.metadata` to detect schema changes, so a model that does
+    not inherit from this class is invisible to migrations.
     """

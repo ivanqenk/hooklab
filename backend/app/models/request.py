@@ -1,4 +1,4 @@
-"""Modelo de una petición HTTP capturada."""
+"""Captured HTTP request model."""
 
 import uuid
 from datetime import datetime
@@ -23,23 +23,23 @@ from app.models.base import Base
 
 
 class Request(Base):
-    """Una petición HTTP capturada, tal como llegó.
+    """An HTTP request captured exactly as it arrived.
 
-    Sobre el cuerpo: se guarda SIEMPRE en crudo (`body_raw`), y solo se guarda una
-    versión parseada (`body_json`) cuando el content-type lo justifica y el parseo
-    no falla. Son dos razones distintas:
+    About the body: it is ALWAYS stored raw (`body_raw`), and a parsed copy
+    (`body_json`) is stored only when the content type justifies it and parsing
+    succeeds. There are two separate reasons:
 
-    1. Los webhooks reales mandan XML, form-encoded, multipart y binario, no solo JSON.
-    2. Más importante: el HMAC de una firma se calcula sobre los bytes EXACTOS del
-       cuerpo. Si guardáramos solo la versión parseada y la volviéramos a serializar,
-       la verificación de firma fallaría aunque el secreto fuera correcto.
+    1. Real webhooks send XML, form-encoded, multipart and binary, not just JSON.
+    2. More importantly, a signature HMAC is computed over the EXACT bytes of the
+       body. If only the parsed version were stored and later re-serialised,
+       signature verification would fail even with the correct secret.
     """
 
     __tablename__ = "requests"
 
-    # BigInteger autoincremental, y no un UUID, a propósito: al ser monotónico sirve
-    # tal cual como `Last-Event-ID` del SSE. El navegador reconecta diciendo "vengo
-    # del 4711" y se le entrega lo que falta, sin necesidad de una tabla de cursores.
+    # BigInteger autoincrement rather than a UUID, on purpose: being monotonic it
+    # doubles as the SSE `Last-Event-ID`. The browser reconnects saying "I am at
+    # 4711" and gets whatever it missed, with no cursor table involved.
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     endpoint_id: Mapped[uuid.UUID] = mapped_column(
@@ -66,9 +66,9 @@ class Request(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
-        # La consulta dominante es "dame las últimas N peticiones de este endpoint".
-        # Un índice compuesto que arranca por endpoint_id la resuelve con un recorrido
-        # de rango; Postgres puede recorrerlo hacia atrás para el ORDER BY id DESC,
-        # así que no hace falta declarar la dirección.
+        # The dominant query is "give me the last N requests for this endpoint".
+        # A composite index starting with endpoint_id answers it with a range
+        # scan; Postgres can walk it backwards for ORDER BY id DESC, so there is
+        # no need to declare a direction.
         Index("ix_requests_endpoint_id_id", "endpoint_id", "id"),
     )

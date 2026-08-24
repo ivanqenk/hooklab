@@ -26,7 +26,7 @@ def upgrade() -> None:
     sa.Column('ingest_token', sa.String(length=64), nullable=False),
     sa.Column('view_token', sa.String(length=64), nullable=False),
     sa.Column('owner_user_id', sa.UUID(), nullable=True),
-    sa.Column('nombre', sa.String(length=120), nullable=True),
+    sa.Column('name', sa.String(length=120), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('request_count', sa.Integer(), server_default='0', nullable=False),

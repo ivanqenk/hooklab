@@ -1,10 +1,11 @@
-"""Punto de entrada de la aplicación Hooklab."""
+"""Hooklab application entry point."""
 
 import logging
 
 from fastapi import FastAPI, Response
 from sqlalchemy import text
 
+from app.api import endpoints
 from app.core.config import get_settings
 from app.core.db import engine
 from app.core.redis import redis
@@ -14,26 +15,29 @@ logging.basicConfig(level=settings.log_level)
 
 app = FastAPI(title="Hooklab", version="0.1.0")
 
+app.include_router(endpoints.router)
+
 
 @app.get("/health", tags=["infra"])
 async def health() -> dict[str, str]:
-    """Liveness: ¿el proceso sigue vivo?
+    """Liveness: is the process still alive?
 
-    NO consulta dependencias, y eso es deliberado. Si Postgres se cae, este proceso
-    sigue sano: reiniciarlo no arreglaría la base de datos, solo tiraría las
-    conexiones que sí funcionan. Un liveness que comprueba dependencias provoca
-    reinicios en cascada justo cuando el sistema ya está sufriendo.
+    It does NOT check dependencies, and that is deliberate. If Postgres goes down
+    this process is still healthy: restarting it would not fix the database, it
+    would only drop the connections that do work. A liveness probe that checks
+    dependencies causes cascading restarts exactly when the system is already
+    struggling.
     """
     return {"status": "ok"}
 
 
 @app.get("/ready", tags=["infra"])
 async def ready(response: Response) -> dict[str, object]:
-    """Readiness: ¿puedo atender tráfico en este momento?
+    """Readiness: can this instance serve traffic right now?
 
-    Aquí SÍ se consultan las dependencias. Devuelve 503 cuando alguna falla, para
-    que el balanceador deje de mandarle peticiones a esta instancia sin matarla:
-    en cuanto la dependencia vuelva, la instancia se reincorpora sola.
+    Here dependencies ARE checked. Returns 503 when any of them fails so a load
+    balancer stops sending requests to this instance without killing it: once the
+    dependency recovers, the instance rejoins on its own.
     """
     checks: dict[str, str] = {}
 
@@ -41,7 +45,7 @@ async def ready(response: Response) -> dict[str, object]:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         checks["postgres"] = "ok"
-    except Exception as exc:  # noqa: BLE001 - queremos reportar cualquier fallo, no filtrarlo
+    except Exception as exc:  # noqa: BLE001 - report any failure, never swallow it
         checks["postgres"] = f"error: {type(exc).__name__}"
 
     try:
@@ -50,6 +54,6 @@ async def ready(response: Response) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001
         checks["redis"] = f"error: {type(exc).__name__}"
 
-    todo_ok = all(v == "ok" for v in checks.values())
-    response.status_code = 200 if todo_ok else 503
-    return {"status": "ready" if todo_ok else "degraded", "checks": checks}
+    all_ok = all(value == "ok" for value in checks.values())
+    response.status_code = 200 if all_ok else 503
+    return {"status": "ready" if all_ok else "degraded", "checks": checks}

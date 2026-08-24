@@ -1,8 +1,8 @@
-"""Modelos de datos.
+"""Data models.
 
-Importar aquí todos los modelos es necesario para que Alembic los vea: la
-autogeneración compara la base real contra `Base.metadata`, y un modelo que
-nadie haya importado sencillamente no está registrado ahí.
+Importing every model here is what makes them visible to Alembic: autogeneration
+compares the live database against `Base.metadata`, and a model nobody imported
+is simply not registered there.
 """
 
 from app.models.base import Base

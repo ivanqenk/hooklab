@@ -1,4 +1,4 @@
-"""Modelo de un endpoint de captura."""
+"""Capture endpoint model."""
 
 import secrets
 import uuid
@@ -10,28 +10,30 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
-# 16 bytes aleatorios → 22 caracteres en base64url. Espacio de búsqueda suficiente
-# para que adivinar un token sea inviable, y corto para que la URL siga siendo
-# cómoda de pegar en el panel de configuración de un proveedor.
+# 16 random bytes produce 22 base64url characters. Large enough that guessing a
+# token is infeasible, short enough that the URL stays comfortable to paste into
+# a provider's configuration panel.
 TOKEN_BYTES = 16
 
 
-def generar_token() -> str:
-    """Token aleatorio criptográficamente seguro y seguro para URLs."""
+def generate_token() -> str:
+    """Cryptographically secure, URL-safe random token."""
     return secrets.token_urlsafe(TOKEN_BYTES)
 
 
 class Endpoint(Base):
-    """Una URL de captura.
+    """A capture URL.
 
-    Lleva DOS tokens distintos a propósito, y es una decisión de seguridad:
+    It carries TWO distinct tokens on purpose, and that is a security decision:
 
-    - `ingest_token` es PÚBLICO: viaja en la URL que pegas en la configuración de
-      Stripe o GitHub, así que acaba en logs, capturas de pantalla y tickets.
-    - `view_token` es SECRETO: es el único que permite *leer* el tráfico capturado.
+    - `ingest_token` is PUBLIC: it travels in the URL pasted into Stripe's or
+      GitHub's configuration, so it ends up in logs, screenshots and tickets.
+    - `view_token` is SECRET: it is the only one that grants *read* access to the
+      captured traffic.
 
-    Si fueran el mismo, cualquiera que viera esa URL en una configuración podría
-    leer todos tus payloads — que suelen incluir credenciales y datos de clientes.
+    If they were the same, anyone who saw that URL in a configuration screen could
+    read every captured payload -- which routinely include credentials and
+    customer data.
     """
 
     __tablename__ = "endpoints"
@@ -39,24 +41,25 @@ class Endpoint(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     ingest_token: Mapped[str] = mapped_column(
-        String(64), unique=True, index=True, default=generar_token
+        String(64), unique=True, index=True, default=generate_token
     )
     view_token: Mapped[str] = mapped_column(
-        String(64), unique=True, index=True, default=generar_token
+        String(64), unique=True, index=True, default=generate_token
     )
 
-    # NULL = endpoint anónimo. Se prevé desde ahora aunque las cuentas lleguen
-    # más adelante: agregar la columna después obligaría a migrar datos existentes.
+    # NULL means an anonymous endpoint. Provided for from the start even though
+    # accounts arrive much later: adding the column afterwards would force a
+    # decision about what value existing rows should take.
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True, index=True
     )
 
-    nombre: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    name: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    # Los anónimos caducan; el worker de retención los borra al vencer.
+    # Anonymous endpoints expire; the retention worker deletes them once due.
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )

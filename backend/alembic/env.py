@@ -1,11 +1,12 @@
-"""Entorno de migraciones de Alembic.
+"""Alembic migration environment.
 
-Dos cosas se conectan aquí con la aplicación real:
+Two things are wired to the real application here:
 
-1. La URL de la base sale de nuestra configuración (el .env), NO de alembic.ini.
-   Así hay una sola fuente de verdad y no se versiona ninguna credencial.
-2. `target_metadata` apunta a `Base.metadata`, que es lo que Alembic compara
-   contra la base real para autogenerar migraciones.
+1. The database URL comes from our settings (the .env), NOT from alembic.ini.
+   That keeps a single source of truth and keeps credentials out of version
+   control.
+2. `target_metadata` points at `Base.metadata`, which is what Alembic compares
+   against the live database to autogenerate migrations.
 """
 
 import asyncio
@@ -18,9 +19,9 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.core.config import get_settings
 
-# Importar el paquete de modelos completo registra TODAS las tablas en
-# Base.metadata. Si algún modelo no llega hasta aquí, Alembic no lo ve y genera
-# migraciones vacías sin explicar por qué.
+# Importing the whole models package registers EVERY table on Base.metadata. Any
+# model that never reaches this import is invisible to Alembic, which then emits
+# empty migrations without explaining why.
 from app.models import Base
 
 config = context.config
@@ -30,16 +31,16 @@ if config.config_file_name is not None:
 
 settings = get_settings()
 
-# ConfigParser trata el signo % como sintaxis de interpolación, así que hay que
-# escaparlo. Sin esto, una contraseña con % rompe las migraciones con un error
-# que no menciona la contraseña por ninguna parte.
+# ConfigParser treats % as interpolation syntax, so it has to be escaped. Without
+# this, a password containing % breaks migrations with an error that never
+# mentions the password.
 config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Genera el SQL sin conectarse a la base (`alembic upgrade --sql`)."""
+    """Emit SQL without connecting to the database (`alembic upgrade --sql`)."""
     context.configure(
         url=config.get_main_option("sqlalchemy.url"),
         target_metadata=target_metadata,
@@ -56,9 +57,9 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        # Sin esto, Alembic ignora los cambios de tipo de una columna: cambiar un
-        # String(50) a String(200) no generaría migración y lo descubrirías en
-        # producción, al fallar un insert.
+        # Without this Alembic ignores column type changes: turning a String(50)
+        # into a String(200) would produce no migration, and you would find out
+        # in production when an insert fails.
         compare_type=True,
     )
 

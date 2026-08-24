@@ -1,4 +1,4 @@
-"""Motor y sesiones de base de datos."""
+"""Database engine and sessions."""
 
 from collections.abc import AsyncIterator
 
@@ -15,24 +15,24 @@ settings = get_settings()
 
 engine: AsyncEngine = create_async_engine(
     settings.database_url,
-    # Manda un "SELECT 1" barato antes de entregar una conexión del pool. Sin esto,
-    # cuando Postgres se reinicia, la primera petición que tome una conexión muerta
-    # falla con un error confuso en lugar de reconectar sola.
+    # Sends a cheap "SELECT 1" before handing out a pooled connection. Without it,
+    # after Postgres restarts, the first request that picks up a dead connection
+    # fails with a confusing error instead of reconnecting on its own.
     pool_pre_ping=True,
     echo=False,
 )
 
 SessionLocal = async_sessionmaker(
     engine,
-    # Sin esto, tras un commit SQLAlchemy marca los objetos como caducados y los
-    # vuelve a consultar en cuanto tocas un atributo. En código asíncrono eso
-    # dispara una consulta implícita fuera de contexto y truena. Es la trampa
-    # número uno de SQLAlchemy en modo async.
+    # Without this, SQLAlchemy expires objects after each commit and re-queries
+    # them as soon as an attribute is touched. In async code that fires an
+    # implicit query outside of any context and blows up. It is the number one
+    # trap of SQLAlchemy in async mode.
     expire_on_commit=False,
 )
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
-    """Dependencia de FastAPI: una sesión por petición, cerrada al terminar."""
+    """FastAPI dependency: one session per request, closed on the way out."""
     async with SessionLocal() as session:
         yield session

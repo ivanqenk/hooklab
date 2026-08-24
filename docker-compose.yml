@@ -1,6 +1,7 @@
-# Entorno local: solo las dependencias.
-# La aplicación corre en el venv del host para iterar rápido (recarga en caliente
-# sin reconstruir imagen). El Dockerfile de la app llega en la fase 6, con el deploy.
+# Local environment: dependencies only.
+# The application itself runs from the host virtualenv so iteration stays fast
+# (hot reload without rebuilding an image). The app Dockerfile arrives in the
+# deployment phase, which is when it is actually needed.
 services:
   postgres:
     image: postgres:18-alpine
@@ -11,12 +12,15 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      # OJO: Postgres 18+ cambió la convención. Antes se montaba en
-      # /var/lib/postgresql/data; ahora el montaje va en el directorio PADRE y la
-      # imagen coloca los datos en un subdirectorio por versión mayor. Montar en
-      # /data hace que el contenedor se niegue a arrancar.
+      # NOTE: Postgres 18+ changed the convention. It used to be mounted at
+      # /var/lib/postgresql/data; now the mount goes on the PARENT directory and
+      # the image places data in a per-major-version subdirectory. Mounting on
+      # /data makes the container refuse to start.
       - postgres-data:/var/lib/postgresql
     healthcheck:
+      # Without a healthcheck, `docker compose up` reports ready when the
+      # container has started, not when Postgres accepts connections. Those are
+      # several seconds apart, and that gap is where first-run failures live.
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hooklab}"]
       interval: 5s
       timeout: 3s
@@ -35,6 +39,8 @@ services:
       timeout: 3s
       retries: 10
 
+# Named volumes: data survives `docker compose down`.
+# To wipe it deliberately: `docker compose down -v`.
 volumes:
   postgres-data:
   redis-data:

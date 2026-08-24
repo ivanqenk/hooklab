@@ -1,1 +1,1 @@
-"""Infraestructura compartida: configuración, base de datos, Redis."""
+"""Shared infrastructure: configuration, database, Redis."""

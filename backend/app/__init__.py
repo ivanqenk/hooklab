@@ -1,1 +1,1 @@
-"""Aplicación Hooklab."""
+"""Application package."""
