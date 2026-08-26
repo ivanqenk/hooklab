@@ -9,12 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal, engine
+from app.core.redis import redis
 from app.main import app
 
 
 @pytest.fixture(autouse=True)
-async def clean_database() -> AsyncIterator[None]:
-    """Empty the tables before every test.
+async def clean_state() -> AsyncIterator[None]:
+    """Empty the tables and the live streams before every test.
 
     Without isolation tests contaminate each other: one leaves rows behind that
     another finds, producing failures that depend on execution order -- among the
@@ -35,7 +36,26 @@ async def clean_database() -> AsyncIterator[None]:
     async with engine.begin() as conn:
         await conn.execute(text("TRUNCATE requests, endpoints RESTART IDENTITY CASCADE"))
 
+    # Only the endpoint streams, never FLUSHDB: the tests share this Redis with
+    # local development. `KEYS` would be a bad idea against a real keyspace but is
+    # exactly right against a handful of test keys.
+    keys = await redis.keys("ep:*")
+    if keys:
+        await redis.delete(*keys)
+
     yield
+
+    # pytest-asyncio builds a fresh event loop for every test, but the Redis
+    # client is a module global and its pool holds sockets bound to the loop that
+    # opened them. The next test then picks up a connection whose loop is closed
+    # and dies with "Event loop is closed" -- during setup, so the failure points
+    # at an innocent test.
+    #
+    # Disconnecting here, still inside the test's own loop, closes them cleanly.
+    # The pool stays usable and opens new connections on demand. It also discards
+    # any connection left mid-command by a cancelled blocking XREAD, which would
+    # otherwise desynchronise the protocol for whoever got it next.
+    await redis.connection_pool.disconnect()
 
 
 @pytest.fixture

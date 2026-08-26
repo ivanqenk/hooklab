@@ -6,8 +6,10 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import select, update
 
-from app.api.deps import SessionDep, SettingsDep
+from app.api.deps import RedisDep, SessionDep, SettingsDep
 from app.models import CapturedRequest, Endpoint
+from app.schemas.request import RequestSummary
+from app.services.bus import publish
 from app.services.capture import (
     normalise_headers,
     normalise_query,
@@ -29,6 +31,7 @@ async def _capture(
     request: Request,
     session: SessionDep,
     settings: SettingsDep,
+    redis: RedisDep,
 ) -> Response:
     started = time.perf_counter()
 
@@ -76,6 +79,14 @@ async def _capture(
     request_id = captured.id
     await session.commit()
 
+    # Announced AFTER the commit, never before. Publishing first would show the
+    # browser a capture that a failed transaction then rolled back -- and a reader
+    # reconnecting later would refill from Postgres and never find it again. The
+    # summary is what the live list renders; the body is fetched on click.
+    await publish(
+        redis, endpoint.id, RequestSummary.model_validate(captured).model_dump(mode="json")
+    )
+
     # Always 200, even for a truncated body. Providers retry on any non-2xx, and
     # a retry storm would bury the very payload the developer is trying to read.
     # The truncation is reported in the stored record instead.
@@ -92,9 +103,10 @@ async def ingest_root(
     request: Request,
     session: SessionDep,
     settings: SettingsDep,
+    redis: RedisDep,
 ) -> Response:
     """Capture a request sent to the bare ingest URL."""
-    return await _capture(token, "", request, session, settings)
+    return await _capture(token, "", request, session, settings, redis)
 
 
 @router.api_route("/in/{token}/{path:path}", methods=ALL_METHODS, include_in_schema=False)
@@ -104,6 +116,7 @@ async def ingest_subpath(
     request: Request,
     session: SessionDep,
     settings: SettingsDep,
+    redis: RedisDep,
 ) -> Response:
     """Capture a request sent to any sub-path of the ingest URL.
 
@@ -111,4 +124,4 @@ async def ingest_subpath(
     use different paths to tell event kinds apart. The path is recorded rather
     than being a reason to reject.
     """
-    return await _capture(token, path, request, session, settings)
+    return await _capture(token, path, request, session, settings, redis)
