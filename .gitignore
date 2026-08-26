@@ -8,7 +8,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# Entorno — NUNCA versionar secretos
+# Environment -- NEVER commit secrets
 .env
 .env.local
 .env.*.local
@@ -20,12 +20,15 @@ node_modules/
 dist/
 .vite/
 
-# Datos locales de contenedores
+# Local container data
 postgres-data/
 redis-data/
 
-# Editor / SO
+# Editor / OS
 .vscode/
 .idea/
 *.swp
 .DS_Store
+
+# Local instructions for AI agents
+CLAUDE.md
