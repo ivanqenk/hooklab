@@ -1,7 +1,7 @@
 [project]
 name = "hooklab"
 version = "0.1.0"
-description = "Gateway de webhooks para desarrollo: recibe, verifica y reenvía"
+description = "A webhook gateway for development: receive, verify and forward"
 requires-python = ">=3.12"
 
 dependencies = [
@@ -37,12 +37,12 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-# E/F: errores y pyflakes · I: orden de imports · UP: modernizar sintaxis
-# B: bugs frecuentes (flake8-bugbear) · S: seguridad (bandit) · ASYNC: fallos async
+# E/F: errors and pyflakes · I: import order · UP: modernise syntax
+# B: common bugs (flake8-bugbear) · S: security (bandit) · ASYNC: async mistakes
 select = ["E", "F", "I", "UP", "B", "S", "ASYNC"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]  # assert es normal en tests
+"tests/*" = ["S101"]  # assert is normal in tests
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -50,7 +50,7 @@ testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.12"
-# Estricto en lo que aporta, sin pelear con el tipado desde el día uno.
+# Strict where it pays off, without fighting the type system from day one.
 warn_unused_configs = true
 disallow_untyped_defs = true
 warn_return_any = true

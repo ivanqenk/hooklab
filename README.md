@@ -2,88 +2,147 @@
 
 [![CI](https://github.com/ivanqenk/hooklab/actions/workflows/ci.yml/badge.svg)](https://github.com/ivanqenk/hooklab/actions/workflows/ci.yml)
 
-**Gateway de webhooks para desarrollo: recibe, verifica y reenvía.**
+**A webhook gateway for development: receive, verify and forward.**
 
-Cuando integras Stripe, GitHub o cualquier proveedor que mande webhooks, te topas con tres
-problemas:
+Integrating Stripe, GitHub or any other webhook provider runs into three problems:
 
-1. Tu máquina no existe en internet, así que el proveedor no puede alcanzar tu `localhost`.
-2. La documentación te dice qué *debería* llegar, pero el payload real trae campos que no
-   esperabas y cabeceras de firma que hay que validar.
-3. Cuando algo truena en producción, tus logs guardaron el stack trace pero no el cuerpo — así
-   que no puedes reproducirlo.
+1. Your machine does not exist on the internet, so the provider cannot reach your `localhost`.
+2. The documentation tells you what *should* arrive, but the real payload carries fields you did
+   not expect and signature headers you have to validate.
+3. When something breaks in production, your logs kept the stack trace but not the body — so you
+   cannot reproduce it.
 
-Hooklab te da una URL pública donde cada petición **se captura y aparece en vivo**, se
-**verifica la firma** del proveedor diciéndote *por qué* falla cuando falla, y se **reenvía** a
-tu destino con reintentos y backoff exponencial.
+Hooklab gives you a public URL where every request is **captured and appears live**, has its
+provider **signature verified** with an explanation of *why* it failed when it does, and is
+**forwarded** to your destination with retries and exponential backoff.
 
-> **Estado: en construcción.** Hoy existe el esqueleto — configuración, conexiones a Postgres y
-> Redis, y los endpoints de salud. La ingesta es lo siguiente.
+> **Status: under construction.** Capture and the live feed work today — you can use Hooklab from
+> `curl` with no frontend. Signature verification is next.
 
-## Requisitos
+## Requirements
 
-- Python 3.12 o superior
-- Docker y Docker Compose
+- Python 3.12 or newer
+- Docker and Docker Compose
 
-## Puesta en marcha
+## Getting started
 
 ```bash
-# 1. Configuración
+# 1. Configuration
 cp .env.example .env
-python -c "import secrets; print(secrets.token_urlsafe(32))"   # pega el resultado en SECRET_KEY
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # paste into SECRET_KEY
 
-# 2. Dependencias (Postgres + Redis)
+# 2. Dependencies (Postgres + Redis)
 docker compose up -d --wait
 
 # 3. Backend
 cd backend
 python -m venv .venv
 .venv/bin/pip install -e ".[dev]"
+.venv/bin/alembic upgrade head
 .venv/bin/uvicorn app.main:app --port 8010 --reload
 ```
 
-Comprobar que quedó bien:
+Check that it came up:
 
 ```bash
 curl http://localhost:8010/health   # {"status":"ok"}
 curl http://localhost:8010/ready    # {"status":"ready","checks":{...}}
 ```
 
-La documentación interactiva de la API queda en <http://localhost:8010/docs>.
+Interactive API docs live at <http://localhost:8010/docs>.
 
-## Calidad
+## Try it
+
+Create an endpoint, watch the live feed in one terminal and send it a webhook from another:
+
+```bash
+# Returns both tokens. ingest_token is public; view_token is secret.
+curl -s -X POST localhost:8010/api/endpoints \
+  -H 'content-type: application/json' -d '{"name":"demo"}'
+
+curl -N localhost:8010/api/endpoints/<view_token>/stream
+
+curl -X POST localhost:8010/in/<ingest_token> \
+  -H 'content-type: application/json' -d '{"hello":"world"}'
+```
+
+The capture shows up on the stream immediately:
+
+```
+event: ready
+data: {"endpoint_id": "bd74bc77-b14e-410b-9ffc-398ccd6aed9d"}
+
+id: 1
+event: request
+data: {"id": 1, "method": "POST", "path": "", "content_type": "application/json", ...}
+```
+
+## Quality
 
 ```bash
 cd backend
-.venv/bin/ruff check app/     # linter
-.venv/bin/ruff format app/    # formato
-.venv/bin/mypy app/           # tipos
+.venv/bin/ruff check app/ tests/ scripts/       # linter
+.venv/bin/ruff format --check app/ tests/ scripts/
+.venv/bin/mypy app/ tests/ scripts/             # types
+.venv/bin/pytest -q                             # tests
 ```
 
-## Decisiones técnicas
+Tests run against **real** Postgres and Redis rather than mocks. That is not purism: it is how a
+real bug got caught — an `INET` column comes back from psycopg as an `IPv4Address`, not as text,
+and no mock would ever have told us.
 
-Las decisiones de fondo, con sus alternativas descartadas, viven en `docs/`. Un resumen de las
-que más condicionan el código:
+### The test that validates the architecture
 
-**Redis Streams, no pub/sub.** La conexión SSE del navegador vive en un proceso de uvicorn, pero
-el webhook entrante puede caer en otro. Sin un bus compartido el navegador nunca lo ve — y con un
-solo worker el bug no aparece, lo que lo hace especialmente traicionero. Streams además resuelve
-de forma nativa el hueco de la reconexión, que es justo para lo que existe el header
-`Last-Event-ID` de SSE.
+```bash
+.venv/bin/uvicorn app.main:app --port 8010 --workers 4
+.venv/bin/python scripts/verify_fanout.py
+```
 
-**El cuerpo se guarda crudo.** Los webhooks reales mandan XML, `form-encoded` y binario, no solo
-JSON. Y sobre todo: el HMAC de una firma se calcula sobre los **bytes exactos** del cuerpo. Si el
-framework parsea y vuelve a serializar, la verificación falla aunque el secreto sea correcto —
-es la causa número uno de "mi validación de webhooks no sirve".
+Open one SSE connection, fire twenty webhooks concurrently, and every one of them must arrive. The
+script checks by PID that some webhooks were served by a worker that does **not** hold the stream,
+so the run cannot pass for the wrong reason.
 
-**Dos tokens distintos.** El de ingesta es público y acaba en logs y capturas de pantalla; el de
-visualización es secreto y es el único que permite *leer* el tráfico. Con un solo token,
-cualquiera que viera esa URL en una configuración podría leer todos tus payloads.
+This cannot be covered by the test suite: pytest drives the app in a single process, where an
+in-memory list would pass every assertion. The bug only exists across processes — and with one
+worker it never reproduces at all, which is exactly what makes it easy to ship.
 
-**Liveness ≠ readiness.** `/health` no consulta dependencias a propósito: si Postgres se cae, el
-proceso sigue sano y reiniciarlo no arreglaría nada. `/ready` sí las consulta y devuelve 503, para
-que un balanceador deje de enviarle tráfico sin matar la instancia.
+## Technical decisions
 
-## Licencia
+The full reasoning, with the alternatives that were rejected, lives in `docs/`. The decisions that
+shape the code the most:
 
-Por definir.
+**Redis Streams, not pub/sub.** The browser's SSE connection lives in one uvicorn process while the
+incoming webhook may land in another. Without a shared bus the browser never sees it — and with a
+single worker the bug does not show, which makes it especially treacherous. Streams also close the
+reconnection gap natively, which is exactly what the SSE `Last-Event-ID` header is for.
+
+**The capture id is the SSE event id.** `requests.id` is a `bigserial`, and being monotonic it
+serves three purposes at once: primary key, pagination cursor (`?before=N`, stable even while new
+captures arrive, which `offset` cannot manage), and `Last-Event-ID` for resuming a dropped stream.
+No cursor table.
+
+**Stream order does not follow id order.** An id is assigned at flush; the announcement goes out
+after commit. Under concurrency those interleave, so capture 87 routinely reaches the stream ahead
+of 85. De-duplicating with a "highest id seen" watermark silently discarded roughly half the
+captures under load — and never once in a sequential test. The guard is a bounded set of ids.
+
+**The body is stored raw.** Real webhooks send XML, `form-encoded` and binary, not just JSON. More
+importantly, a signature HMAC is computed over the **exact bytes** of the body. If the framework
+parses and re-serializes, verification fails even with the correct secret — the number one cause of
+"my webhook validation doesn't work".
+
+**Two separate tokens.** The ingest token is public and ends up in logs and screenshots; the view
+token is secret and is the only one that can *read* the traffic. With a single token, anyone who
+saw that URL in a configuration panel could read all your payloads.
+
+**A raw body is never served with its original content type.** Always `octet-stream`, always an
+attachment, always `nosniff`. Echoing back `text/html` chosen by a stranger would turn the domain
+into free malware hosting.
+
+**Liveness ≠ readiness.** `/health` deliberately does not check dependencies: if Postgres goes
+down, the process is still healthy and restarting it would fix nothing. `/ready` does check them
+and returns 503, so a load balancer stops sending traffic without killing the instance.
+
+## License
+
+To be decided.
