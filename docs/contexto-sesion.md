@@ -1,7 +1,7 @@
 # Contexto de sesión — Hooklab
 
 Documento para retomar el proyecto sin releer toda la conversación anterior.
-**Última actualización: 2026-08-24.**
+**Última actualización: 2026-08-26.**
 
 ---
 
@@ -22,8 +22,8 @@ Gateway de webhooks para desarrollo. Generas una URL pública y cada petición q
 
 ## 2. Dónde estamos exactamente
 
-**Último commit: `HL-10`.** Rama `main` sincronizada, CI en verde.
-**La fase 1 está completa: Hooklab ya es utilizable con `curl`, sin frontend.**
+**Último commit: `HL-13`.** Rama `main` sincronizada, CI en verde.
+**Las fases 1 y 2 están completas: Hooklab captura y transmite en vivo, sin frontend todavía.**
 
 | Commit | Contenido |
 |---|---|
@@ -36,6 +36,8 @@ Gateway de webhooks para desarrollo. Generas una URL pública y cada petición q
 | HL-7, HL-8 | Actualización de este documento |
 | HL-9 | Ruta de ingesta: captura cualquier petición en `/in/{ingest_token}` |
 | HL-10 | Listado, detalle y descarga del cuerpo de las capturas |
+| HL-11, HL-12 | Actualización del contexto; `CLAUDE.md` fuera del repositorio |
+| HL-13 | **Fase 2**: feed en vivo con Redis Streams y SSE |
 
 ### Funciona y está verificado
 
@@ -46,14 +48,19 @@ Gateway de webhooks para desarrollo. Generas una URL pública y cada petición q
 - **Flujo completo**: crear endpoint → recibir webhooks de cualquier método y content-type →
   listarlos paginados → ver el detalle → descargar el cuerpo crudo.
 - Migración aplicada, con reversión probada en una ida y vuelta completa.
-- 43 pruebas contra servicios reales, con aislamiento por `TRUNCATE` entre cada una.
+- **Feed en vivo**: `GET /api/endpoints/{view_token}/stream` entrega las capturas conforme llegan,
+  con reconexión por `Last-Event-ID` y relleno del hueco desde Postgres.
+- **La prueba que valida la arquitectura pasa**: `scripts/verify_fanout.py` contra
+  `uvicorn --workers 4` — las 20 capturas cruzan de un proceso a otro, verificando por PID que
+  realmente cayeron en workers distintos.
+- 56 pruebas contra servicios reales, con aislamiento por `TRUNCATE` entre cada una.
 - CI: matriz Python 3.12 y 3.14, con Postgres y Redis como servicios, corriendo `ruff`,
   `ruff format --check`, `mypy`, migraciones y `pytest`.
 - Verificado también a mano con `curl` contra el servidor real.
 
 ### Falta
 
-Tiempo real con SSE, firmas, reenvío, frontend y despliegue.
+Firmas, reenvío, frontend y despliegue.
 
 ---
 
@@ -74,10 +81,26 @@ Antes de cada commit, correr **exactamente lo que corre el CI**:
 
 ```bash
 cd backend
-.venv/bin/ruff check app/ tests/
-.venv/bin/ruff format --check app/ tests/
-.venv/bin/mypy app/ tests/
+.venv/bin/ruff check app/ tests/ scripts/
+.venv/bin/ruff format --check app/ tests/ scripts/
+.venv/bin/mypy app/ tests/ scripts/
 .venv/bin/pytest -q
+```
+
+Ver el feed en vivo a mano:
+
+```bash
+TOKEN=$(curl -s -X POST localhost:8010/api/endpoints -H 'content-type: application/json' \
+  -d '{}' | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["view_token"], d["ingest_token"])')
+curl -N localhost:8010/api/endpoints/${TOKEN%% *}/stream    # en una terminal
+curl -X POST localhost:8010/in/${TOKEN##* } -d '{"hola":1}' # en otra
+```
+
+La prueba que valida la arquitectura (con el servidor en `--workers 4`):
+
+```bash
+.venv/bin/uvicorn app.main:app --port 8010 --workers 4
+.venv/bin/python scripts/verify_fanout.py
 ```
 
 ---
@@ -124,6 +147,17 @@ Cosas que ya costaron tiempo una vez. No hay que volver a tropezar con ellas.
 - **Reenvío confiable y verificación de firmas van en el núcleo**, no en una v2 hipotética.
 - **Despliegue en VPS con Docker Compose y Caddy**, ~6 USD/mes. El SSE de larga duración descarta
   las plataformas serverless.
+- **La posición del Stream se toma ANTES de rellenar desde Postgres.** Al revés, todo lo que llegue
+  durante el relleno se pierde sin forma de detectarlo. El costo es algún duplicado, que se filtra.
+- **El filtro anti-duplicados es un conjunto de ids, no una marca de agua.** El id se asigna en el
+  `flush` y se publica tras el `commit`, así que bajo concurrencia el orden del Stream **no** sigue
+  al de los ids. Con marca de agua se descartaba en silencio cerca de la mitad de las capturas, y
+  solo bajo carga. Hay prueba de regresión.
+- **El SSE no usa `SessionDep`.** Una dependencia con `yield` vive hasta que termina la respuesta, y
+  la de un SSE no termina nunca: con el pool por defecto, la pestaña 16 deja sin conexiones a toda
+  la app. Usa `DetachedEndpointDep` y abre su propia sesión solo para el relleno.
+- **`ready` se manda después del relleno**, así significa "ya estás al día" y no solo "socket
+  abierto".
 
 ### Ideas descartadas — no volver a proponerlas
 
@@ -134,20 +168,36 @@ Cosas que ya costaron tiempo una vez. No hay que volver a tropezar con ellas.
 
 ---
 
-## 6. Lo siguiente — fase 2: tiempo real
+## 6. Lo siguiente — fase 3: verificación de firmas
 
-Es **el núcleo técnico del proyecto** y lo que lo separa de un CRUD.
+Con la captura y el tiempo real ya resueltos, sigue el segundo diferenciador.
 
-1. **Publicar en un Redis Stream** al ingerir: `XADD ep:{endpoint_id}` con `MAXLEN ~ 1000`.
-2. **Endpoint SSE** `GET /api/endpoints/{view_token}/stream`, leyendo con `XREAD BLOCK`.
-3. **Reconexión con `Last-Event-ID`**: el navegador dice "vengo del 4711" y se le entrega lo que
-   faltó. El `bigserial` de `requests` ya sirve tal cual como ese identificador.
-4. **La prueba que valida toda la arquitectura**: levantar uvicorn con `--workers 4`, abrir el SSE y
-   mandar 20 peticiones con `curl`. Deben aparecer **las 20**. Sin bus compartido aparecen solo las
-   que cayeron en el worker correcto — y con un solo worker el bug no se manifiesta, que es
-   justamente lo que lo hace traicionero. Va documentada en el README.
+1. **Interfaz común y un verificador por proveedor**, empezando por **Stripe y GitHub**: entre los
+   dos cubren hex contra base64 y la tolerancia temporal de Stripe.
+2. **El diferenciador es el diagnóstico, no el booleano.** No basta "firma inválida": hay que decir
+   *por qué* — el HMAC no coincide, el timestamp tiene 400 s y cae fuera de la tolerancia, o el
+   cuerpo llegó truncado. Ahí es donde la gente pierde horas y nadie lo resuelve hoy.
+3. **`hmac.compare_digest`, jamás `==`.** Comparar byte a byte con salida temprana filtra la firma
+   correcta por ataque de tiempo.
+4. **El `signature_secret` se guarda cifrado** (AES-GCM con clave del entorno) y **nunca** sale por
+   la API. Ya está el hueco previsto en el modelo de datos.
+5. Vectores de prueba por proveedor, con casos negativos: secreto equivocado, timestamp vencido y
+   cuerpo alterado en un byte — cada uno con su diagnóstico esperado.
 
-Después: firmas → entrega confiable → frontend → cuentas.
+El cuerpo crudo en `bytea` existe precisamente para esto: el HMAC se calcula sobre los bytes
+exactos, y parsear y reserializar rompería toda verificación aunque el secreto fuera correcto.
+
+Después: entrega confiable → frontend → cuentas.
+
+### Trampas ya pagadas que conviene no volver a pisar
+
+- **`ASGITransport` de httpx no hace streaming**: ejecuta la app hasta el final y junta el cuerpo
+  entero. Contra un SSE infinito se cuelga para siempre. Por eso `tests/sse.py` habla ASGI directo.
+- **pytest-asyncio crea un event loop por prueba**, y el cliente global de Redis conservaba
+  conexiones del loop anterior ya cerrado. Se manifiesta como `Event loop is closed` en el *setup*
+  de una prueba inocente. Resuelto desconectando el pool al final de cada prueba en `conftest.py`.
+- **Matar al maestro de uvicorn no mata a los workers**, y su línea de comando no coincide con
+  `pgrep -f 'uvicorn app.main'`. Hay que matarlos por PID o por grupo de procesos.
 
 ### Duda pendiente
 
