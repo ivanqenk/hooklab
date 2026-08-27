@@ -42,7 +42,14 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B", "S", "ASYNC"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]  # assert is normal in tests
+"tests/*" = [
+    "S101",           # assert is normal in tests
+    # Test vectors are fake credentials by definition, and signature tests cannot
+    # exist without them. Flagging every one is pure noise that trains people to
+    # ignore the rule where it does matter -- in app/.
+    "S105",
+    "S106",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
