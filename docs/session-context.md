@@ -1,7 +1,7 @@
 # Session context — Hooklab
 
 A document for picking the project back up without re-reading the whole previous conversation.
-**Last updated: 2026-08-26.**
+**Last updated: 2026-08-27.**
 
 ---
 
@@ -22,8 +22,8 @@ A webhook gateway for development. You generate a public URL, and every request 
 
 ## 2. Exactly where we are
 
-**Latest commit: `HL-15`.** Branch `main` in sync, CI green.
-**Phases 1 and 2 are complete: Hooklab captures and streams live, no frontend yet.**
+**Latest commit: `HL-18`.** Branch `main` in sync, CI green.
+**Phases 1, 2 and 3 are complete: Hooklab captures, streams live and verifies signatures.**
 
 | Commit | Contents |
 |---|---|
@@ -40,6 +40,9 @@ A webhook gateway for development. You generate a public URL, and every request 
 | HL-13 | **Phase 2**: live feed with Redis Streams and SSE |
 | HL-14 | Context update after phase 2 |
 | HL-15 | README and `docs/` translated to English |
+| HL-16 | **Phase 3**: Stripe and GitHub signature verifiers |
+| HL-17 | Signature verification wired end to end |
+| HL-18 | Documentation updated after phase 3 |
 
 ### Works and is verified
 
@@ -55,14 +58,18 @@ A webhook gateway for development. You generate a public URL, and every request 
 - **The architecture-validating test passes**: `scripts/verify_fanout.py` against
   `uvicorn --workers 4` — all 20 captures cross from one process to another, verified by PID that
   they really landed on different workers.
-- 56 tests against real services, isolated by `TRUNCATE` between each one.
+- **Signature verification**: `PUT /api/endpoints/{view_token}/signature` turns it on, and every
+  capture is checked inline. The verdict travels in the listing, the detail and the live feed.
+  Verified by hand against a real server with all six Stripe cases, each giving its own diagnosis.
+- 99 tests against real services, isolated by `TRUNCATE` between each one. The signature tests are
+  anchored on GitHub's own published vector and were validated with deliberate mutations.
 - CI: Python 3.12 and 3.14 matrix, with Postgres and Redis as services, running `ruff`,
   `ruff format --check`, `mypy`, migrations and `pytest`.
 - Also verified by hand with `curl` against the real server.
 
 ### Missing
 
-Signatures, forwarding, frontend and deployment.
+Forwarding, frontend and deployment.
 
 ---
 
@@ -162,6 +169,27 @@ Things that already cost time once. No need to trip over them again.
   connections. It uses `DetachedEndpointDep` and opens its own session only for the backfill.
 - **`ready` is sent after the backfill**, so it means "you are caught up" and not just "socket
   open".
+- **The signing secret is write-only**: encrypted with AES-GCM at rest and returned by no route, in
+  no form. Not masked -- absent. A masked value still leaks its length and invites someone to "show
+  just a few characters" later.
+- **AES-GCM, not plain AES**, with the key derived via HKDF under a fixed label. Authenticated
+  encryption means tampering fails loudly; deriving keeps this key separate from any future use of
+  `SECRET_KEY`.
+- **Rotating `SECRET_KEY` makes stored secrets unreadable**, by design. It is reported as its own
+  case, never as an invalid signature: the fix is to set the secret again.
+- **Verification is configured behind the *view* token**, never the ingest one. The public token
+  reaches logs and configuration panels; if it could set the secret, anyone who saw the URL could
+  disable verification or point it at a secret of their own.
+- **A failed signature never costs the capture.** Ingest still answers 200 and still stores the
+  body: refusing it would hide the very request needed to diagnose the failure.
+- **Verification runs inline during ingest.** One HMAC over at most a megabyte is well under a
+  millisecond, and deferring it would show the browser a capture whose verdict lands later.
+- **The diagnosis is the feature, not the boolean.** Every case carries a machine-readable reason
+  and a sentence that says what to do next -- including the one only we can give: a body Hooklab
+  itself truncated can never match, and saying "invalid signature" would blame a correct secret.
+- **Read routes use an explicit outer join, not an ORM relationship.** A lazily-loaded attribute in
+  async SQLAlchemy fires a query from wherever it is touched, including inside the response
+  serialiser, long after the session is gone.
 
 ### Discarded ideas — do not propose them again
 
@@ -172,27 +200,40 @@ Things that already cost time once. No need to trip over them again.
 
 ---
 
-## 6. What comes next — phase 3: signature verification
+## 6. What comes next — phase 4: reliable delivery
 
-With capture and real time solved, the second differentiator is next.
+The part that makes this an engineering project rather than a CRUD.
 
-1. **A common interface with one verifier per provider**, starting with **Stripe and GitHub**:
-   between them they cover hex vs base64 and Stripe's timestamp tolerance.
-2. **The differentiator is the diagnosis, not the boolean.** "Invalid signature" is not enough; it
-   has to say *why* — the HMAC does not match, the timestamp is 400 s old and outside the
-   tolerance, or the body arrived truncated. That is where people lose hours and nobody solves it
-   today.
-3. **`hmac.compare_digest`, never `==`.** Comparing byte by byte with early exit leaks the correct
-   signature through a timing attack.
-4. **`signature_secret` is stored encrypted** (AES-GCM with a key from the environment) and
-   **never** leaves through the API. The slot is already planned in the data model.
-5. Test vectors per provider, with negative cases: wrong secret, expired timestamp and a body
-   altered by one byte — each with its expected diagnosis.
+1. **Destinations per endpoint**, and forwarding only to **verified** ones, for accounts only.
+   Blocking private ranges stops attacks on *our* network; it does not stop someone using Hooklab to
+   attack a third party. Verification is a request carrying a token the destination must echo back.
+   It also happens to be the natural reason to sign up.
+2. **SSRF defence is the hard part** — resolve the hostname once, validate **every** resolved
+   address, then connect to that IP while passing the original `Host` and SNI. Validating the string
+   and letting the HTTP client resolve again leaves a window for DNS rebinding. `::ffff:0:0/96`
+   (IPv4-mapped IPv6) is the bypass everyone forgets. No redirects, http/https only.
+3. **Exponential backoff with jitter.** Without jitter, 500 deliveries that failed together retry in
+   the same instant and knock the destination over again.
+4. **At-least-once, not exactly-once** -- impossible over HTTP. A stable `idempotency_key` across
+   retries lets the receiver deduplicate. This goes in the README: understanding why exactly-once
+   does not exist is worth more than any feature.
+5. **Dead-letter queue and circuit breaker**: after N attempts a delivery is exhausted and stays
+   visible and manually retryable; a destination that keeps failing gets paused rather than hammered.
 
-The raw body in `bytea` exists precisely for this: the HMAC is computed over the exact bytes, and
-parsing plus re-serializing would break every verification even with the correct secret.
+Testing this needs the clock injected as a dependency. Sleeping through exponential backoff is the
+difference between a two-second suite and a twenty-minute one.
 
-After that: reliable delivery → frontend → accounts.
+After that: frontend → accounts → deployment.
+
+### Known gaps, deliberately left
+
+- **Captures taken before a secret was configured are never verified.** The natural flow is to
+  configure first, but "wrong secret, fix it, re-check what I already captured" is a real one. The
+  data model already supports it: `signature_checks` keys on `request_id`, so re-verification is an
+  upsert over one endpoint's rows.
+- **Only Stripe and GitHub.** Shopify (base64 rather than hex) and Twilio (HMAC-SHA1 over the URL
+  plus sorted parameters) are next; the interface in `app/services/signatures/base.py` is what they
+  plug into.
 
 ### Traps already paid for, worth not stepping on again
 
@@ -205,6 +246,8 @@ After that: reliable delivery → frontend → accounts.
   `conftest.py`.
 - **Killing the uvicorn master does not kill the workers**, and their command line does not match
   `pgrep -f 'uvicorn app.main'`. They have to be killed by PID or by process group.
+- **`ruff`'s S105/S106 fire on every test vector**, since a fake credential looks exactly like a real
+  one. Ignored for `tests/` only; still enforced in `app/`.
 
 ---
 

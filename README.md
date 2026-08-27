@@ -16,8 +16,8 @@ Hooklab gives you a public URL where every request is **captured and appears liv
 provider **signature verified** with an explanation of *why* it failed when it does, and is
 **forwarded** to your destination with retries and exponential backoff.
 
-> **Status: under construction.** Capture and the live feed work today — you can use Hooklab from
-> `curl` with no frontend. Signature verification is next.
+> **Status: under construction.** Capture, the live feed and signature verification work today —
+> you can use Hooklab from `curl` with no frontend. Reliable forwarding is next.
 
 ## Requirements
 
@@ -77,6 +77,30 @@ event: request
 data: {"id": 1, "method": "POST", "path": "", "content_type": "application/json", ...}
 ```
 
+## Verify a signature
+
+Point an endpoint at a provider and every capture gets checked as it arrives:
+
+```bash
+curl -X PUT localhost:8010/api/endpoints/<view_token>/signature \
+  -H 'content-type: application/json' \
+  -d '{"provider":"github","secret":"It'"'"'s a Secret to Everybody"}'
+```
+
+The verdict rides along with the capture, in the listing, the detail and the live feed:
+
+```json
+{
+  "valid": false,
+  "reason": "timestamp_out_of_tolerance",
+  "detail": "The signature is genuine, so your secret is correct, but the timestamp is 400 seconds old and the tolerance is 300. Either this is a replay of an earlier event, or this machine's clock has drifted."
+}
+```
+
+That sentence is the feature. Every other tool tells you `invalid` — which you already knew.
+
+The secret is **write-only**: encrypted at rest and returned by no route, in any form.
+
 ## Quality
 
 ```bash
@@ -130,6 +154,13 @@ captures under load — and never once in a sequential test. The guard is a boun
 importantly, a signature HMAC is computed over the **exact bytes** of the body. If the framework
 parses and re-serializes, verification fails even with the correct secret — the number one cause of
 "my webhook validation doesn't work".
+
+**The diagnosis is the product, not the boolean.** The failures that actually happen are few and
+each has a different fix: a test-mode secret used with a live-mode event, a body signed without the
+timestamp prefix, an event replayed outside the tolerance window, a signature header that never
+arrived. Naming which one it was is the difference between a five-second fix and an afternoon.
+Hooklab can also give a diagnosis nobody else can: when it truncated the body at its own size limit,
+the HMAC cannot match, and blaming the secret would be actively misleading.
 
 **Two separate tokens.** The ingest token is public and ends up in logs and screenshots; the view
 token is secret and is the only one that can *read* the traffic. With a single token, anyone who
