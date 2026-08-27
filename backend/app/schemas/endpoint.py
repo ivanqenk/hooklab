@@ -5,6 +5,24 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.signatures import PROVIDERS
+
+
+class SignatureConfigure(BaseModel):
+    """Turn on verification for an endpoint.
+
+    There is no matching response carrying the secret back, and there never will
+    be: this is write-only. Holding it lets an attacker forge webhooks the
+    customer's own systems accept as genuine.
+    """
+
+    provider: str = Field(description=f"One of: {', '.join(PROVIDERS)}.")
+    secret: str = Field(
+        min_length=1,
+        max_length=512,
+        description="The signing secret from the provider's dashboard.",
+    )
+
 
 class EndpointCreate(BaseModel):
     """Request body for creating an endpoint. Everything is optional."""
@@ -56,3 +74,7 @@ class EndpointPublic(BaseModel):
     created_at: datetime
     expires_at: datetime
     request_count: int
+    # Which provider is being verified, if any. The secret itself is absent --
+    # not masked, absent. A masked value still leaks its length and would invite
+    # someone to "just show a few characters" later.
+    signature_provider: str | None = None

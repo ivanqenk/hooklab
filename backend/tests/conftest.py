@@ -34,7 +34,9 @@ async def clean_state() -> AsyncIterator[None]:
         raise RuntimeError("Tests must never run against production")
 
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE requests, endpoints RESTART IDENTITY CASCADE"))
+        await conn.execute(
+            text("TRUNCATE signature_checks, requests, endpoints RESTART IDENTITY CASCADE")
+        )
 
     # Only the endpoint streams, never FLUSHDB: the tests share this Redis with
     # local development. `KEYS` would be a bad idea against a real keyspace but is

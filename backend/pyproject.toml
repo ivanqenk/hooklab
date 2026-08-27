@@ -14,6 +14,10 @@ dependencies = [
     "redis>=5.3,<7.0",
     "arq>=0.28,<1.0",
     "python-multipart>=0.0.32",
+    # AES-GCM for the signature secrets at rest. The standard library has no
+    # authenticated encryption, and rolling it by hand is exactly the kind of
+    # thing that goes quietly wrong.
+    "cryptography>=44,<47",
 ]
 
 [project.optional-dependencies]

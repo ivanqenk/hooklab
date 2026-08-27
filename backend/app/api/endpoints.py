@@ -2,11 +2,18 @@
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import EndpointDep, SessionDep, SettingsDep
+from app.core.crypto import encrypt
 from app.models import Endpoint
-from app.schemas.endpoint import EndpointCreate, EndpointCreated, EndpointPublic
+from app.schemas.endpoint import (
+    EndpointCreate,
+    EndpointCreated,
+    EndpointPublic,
+    SignatureConfigure,
+)
+from app.services.signatures import PROVIDERS
 
 router = APIRouter(prefix="/api/endpoints", tags=["endpoints"])
 
@@ -64,4 +71,58 @@ async def get_endpoint(endpoint: EndpointDep, settings: SettingsDep) -> Endpoint
         created_at=endpoint.created_at,
         expires_at=endpoint.expires_at,
         request_count=endpoint.request_count,
+        signature_provider=endpoint.signature_provider,
     )
+
+
+@router.put("/{view_token}/signature", response_model=EndpointPublic)
+async def configure_signature(
+    data: SignatureConfigure,
+    endpoint: EndpointDep,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> EndpointPublic:
+    """Start verifying signatures on this endpoint.
+
+    Behind the *view* token, not the ingest one. The ingest token is public and
+    ends up in configuration panels and logs; if it could set the signing secret,
+    anyone who saw the URL could turn verification off or point it at a secret of
+    their own.
+
+    The secret is encrypted before it touches the database and is never returned
+    by any route, so setting it again is the only way to change it.
+    """
+    if data.provider not in PROVIDERS:
+        raise HTTPException(
+            # ..._ENTITY is deprecated in current Starlette; same 422, current name.
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unknown provider '{data.provider}'. Supported: {', '.join(PROVIDERS)}.",
+        )
+
+    endpoint.signature_provider = data.provider
+    endpoint.signature_secret = encrypt(data.secret)
+    session.add(endpoint)
+    await session.commit()
+
+    return EndpointPublic(
+        id=endpoint.id,
+        name=endpoint.name,
+        ingest_url=build_ingest_url(settings.public_ingest_base, endpoint.ingest_token),
+        created_at=endpoint.created_at,
+        expires_at=endpoint.expires_at,
+        request_count=endpoint.request_count,
+        signature_provider=endpoint.signature_provider,
+    )
+
+
+@router.delete("/{view_token}/signature", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_signature(endpoint: EndpointDep, session: SessionDep) -> None:
+    """Stop verifying, and forget the stored secret.
+
+    Both fields are cleared together: a provider with no secret would be a state
+    that can only produce a useless verdict on every capture.
+    """
+    endpoint.signature_provider = None
+    endpoint.signature_secret = None
+    session.add(endpoint)
+    await session.commit()

@@ -6,7 +6,29 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.models import CapturedRequest
+from app.models import CapturedRequest, SignatureCheck
+
+
+class SignatureSummary(BaseModel):
+    """Enough to draw a badge in a list: was it valid, and which case was it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    provider: str
+    valid: bool
+    reason: str
+
+
+class SignatureDetail(SignatureSummary):
+    """The full verdict, including the sentence that actually helps.
+
+    `detail` is the whole point of this feature. "Invalid signature" tells a
+    developer nothing they did not already know; "the signature is genuine but
+    the event is 400 seconds old" tells them exactly what to do next.
+    """
+
+    detail: str
+    checked_at: datetime
 
 
 class RequestSummary(BaseModel):
@@ -28,6 +50,25 @@ class RequestSummary(BaseModel):
     source_ip: str | None
     received_at: datetime
     duration_ms: int | None
+    # None when the endpoint has no provider configured, which is the common case.
+    signature: SignatureSummary | None = None
+
+    @classmethod
+    def from_model(
+        cls, captured: CapturedRequest, check: SignatureCheck | None = None
+    ) -> "RequestSummary":
+        """Build from a capture and its check, both passed in explicitly.
+
+        The check is handed over rather than reached through a relationship on
+        purpose. In async SQLAlchemy a lazily-loaded attribute fires a query from
+        wherever it happens to be touched -- including inside a response
+        serialiser, long after the session is gone. Passing it in makes every
+        caller state where it came from.
+        """
+        summary = cls.model_validate(captured)
+        if check is not None:
+            summary.signature = SignatureSummary.model_validate(check)
+        return summary
 
     @field_validator("source_ip", mode="before")
     @classmethod
@@ -55,9 +96,16 @@ class RequestDetail(RequestSummary):
     body_text: str | None
     body_base64: str | None
     body_encoding: str | None
+    # Narrower than the parent's on purpose: the detail view is the one place the
+    # explanatory sentence belongs. Putting it in the summary too would carry a
+    # paragraph per row through every listing, which is exactly what the summary
+    # exists to avoid.
+    signature: SignatureDetail | None = None
 
     @classmethod
-    def from_model(cls, captured: CapturedRequest) -> "RequestDetail":
+    def from_model(
+        cls, captured: CapturedRequest, check: SignatureCheck | None = None
+    ) -> "RequestDetail":
         text: str | None = None
         encoded: str | None = None
         encoding: str | None = None
@@ -86,6 +134,7 @@ class RequestDetail(RequestSummary):
             body_text=text,
             body_base64=encoded,
             body_encoding=encoding,
+            signature=None if check is None else SignatureDetail.model_validate(check),
         )
 
 

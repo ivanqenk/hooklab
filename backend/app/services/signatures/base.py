@@ -24,8 +24,13 @@ class Reason(StrEnum):
     """
 
     VALID = "valid"
-    # Not a credential: an enum member naming the case where none is configured.
+    # Not credentials: enum members naming the cases where a usable secret is
+    # missing. UNREADABLE_SECRET means the stored ciphertext would not open --
+    # essentially always because SECRET_KEY was rotated -- and it is kept distinct
+    # from NO_SECRET because the fix is different: set the secret again, rather
+    # than set one for the first time.
     NO_SECRET = "no_secret"  # noqa: S105
+    UNREADABLE_SECRET = "unreadable_secret"  # noqa: S105
     MISSING_HEADER = "missing_header"
     MALFORMED_HEADER = "malformed_header"
     BODY_TRUNCATED = "body_truncated"

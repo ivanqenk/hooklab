@@ -7,8 +7,10 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import select, update
 
 from app.api.deps import RedisDep, SessionDep, SettingsDep
-from app.models import CapturedRequest, Endpoint
+from app.core.crypto import UndecryptableSecret, decrypt
+from app.models import CapturedRequest, Endpoint, SignatureCheck
 from app.schemas.request import RequestSummary
+from app.services import signatures
 from app.services.bus import publish
 from app.services.capture import (
     normalise_headers,
@@ -23,6 +25,49 @@ from app.services.capture import (
 router = APIRouter(tags=["ingest"])
 
 ALL_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+
+
+def _check_signature(endpoint: Endpoint, captured: CapturedRequest) -> SignatureCheck | None:
+    """Verify the capture, or return None when this endpoint verifies nothing.
+
+    Done inline rather than handed to a worker. The plan's rule is that ingest
+    must answer fast because providers retry on a timeout -- but that was about
+    network calls and queueing, and one HMAC over at most a megabyte is well under
+    a millisecond. Deferring it would buy nothing and would mean the browser sees
+    a capture whose verdict arrives later.
+    """
+    if not endpoint.signature_provider or not endpoint.signature_secret:
+        return None
+
+    try:
+        secret = decrypt(endpoint.signature_secret)
+    except UndecryptableSecret:
+        # Rotating SECRET_KEY makes every stored secret unreadable. Saying so is
+        # the useful answer; reporting an invalid signature would blame a secret
+        # that was never wrong.
+        result = signatures.Verification.failed(
+            signatures.Reason.UNREADABLE_SECRET,
+            "The stored secret could not be decrypted, which happens when "
+            "SECRET_KEY changes. Set the signing secret again to fix it.",
+        )
+    else:
+        result = signatures.verify(
+            provider=endpoint.signature_provider,
+            secret=secret,
+            body=captured.body_raw or b"",
+            headers=captured.headers,
+            body_truncated=captured.body_truncated,
+            body_size=captured.body_size,
+            now=time.time(),
+        )
+
+    return SignatureCheck(
+        request_id=captured.id,
+        provider=endpoint.signature_provider,
+        valid=result.valid,
+        reason=result.reason.value,
+        detail=result.detail,
+    )
 
 
 async def _capture(
@@ -77,6 +122,11 @@ async def _capture(
     # response body.
     await session.flush()
     request_id = captured.id
+
+    check = _check_signature(endpoint, captured)
+    if check is not None:
+        session.add(check)
+
     await session.commit()
 
     # Announced AFTER the commit, never before. Publishing first would show the
@@ -84,7 +134,7 @@ async def _capture(
     # reconnecting later would refill from Postgres and never find it again. The
     # summary is what the live list renders; the body is fetched on click.
     await publish(
-        redis, endpoint.id, RequestSummary.model_validate(captured).model_dump(mode="json")
+        redis, endpoint.id, RequestSummary.from_model(captured, check).model_dump(mode="json")
     )
 
     # Always 200, even for a truncated body. Providers retry on any non-2xx, and

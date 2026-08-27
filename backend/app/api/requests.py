@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from sqlalchemy import select
 
 from app.api.deps import EndpointDep, SessionDep
-from app.models import CapturedRequest
+from app.models import CapturedRequest, SignatureCheck
 from app.schemas.request import RequestDetail, RequestPage, RequestSummary
 
 router = APIRouter(prefix="/api/endpoints/{view_token}/requests", tags=["requests"])
@@ -24,7 +24,12 @@ async def list_requests(
 ) -> RequestPage:
     """List captures, newest first, paginated by cursor."""
     query = (
-        select(CapturedRequest)
+        # An outer join rather than a relationship: most captures have no check,
+        # and an ORM relationship would either lazily fire one query per row from
+        # inside the serialiser -- which async SQLAlchemy cannot do -- or need
+        # eager-loading config that is easy to forget on a new query.
+        select(CapturedRequest, SignatureCheck)
+        .outerjoin(SignatureCheck, SignatureCheck.request_id == CapturedRequest.id)
         .where(CapturedRequest.endpoint_id == endpoint.id)
         .order_by(CapturedRequest.id.desc())
         # One extra row is fetched to find out whether another page exists,
@@ -34,36 +39,40 @@ async def list_requests(
     if before is not None:
         query = query.where(CapturedRequest.id < before)
 
-    rows = list((await session.execute(query)).scalars().all())
+    rows = list((await session.execute(query)).all())
 
     has_more = len(rows) > limit
     page = rows[:limit]
 
     return RequestPage(
-        items=[RequestSummary.model_validate(row) for row in page],
-        next_cursor=page[-1].id if has_more and page else None,
+        items=[RequestSummary.from_model(captured, check) for captured, check in page],
+        next_cursor=page[-1][0].id if has_more and page else None,
     )
 
 
-async def _load(session: SessionDep, endpoint: EndpointDep, request_id: int) -> CapturedRequest:
-    """Fetch one capture, scoped to the endpoint the token unlocked.
+async def _load(
+    session: SessionDep, endpoint: EndpointDep, request_id: int
+) -> tuple[CapturedRequest, SignatureCheck | None]:
+    """Fetch one capture and its verdict, scoped to the endpoint the token unlocked.
 
     The endpoint_id filter is what stops a caller from reading someone else's
     capture by guessing a sequential id -- which is trivial, since ids are
     consecutive integers by design.
     """
     result = await session.execute(
-        select(CapturedRequest).where(
+        select(CapturedRequest, SignatureCheck)
+        .outerjoin(SignatureCheck, SignatureCheck.request_id == CapturedRequest.id)
+        .where(
             CapturedRequest.id == request_id,
             CapturedRequest.endpoint_id == endpoint.id,
         )
     )
-    captured = result.scalar_one_or_none()
+    row = result.one_or_none()
 
-    if captured is None:
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
 
-    return captured
+    return row[0], row[1]
 
 
 @router.get("/{request_id}", response_model=RequestDetail)
@@ -72,8 +81,9 @@ async def get_request(
     endpoint: EndpointDep,
     session: SessionDep,
 ) -> RequestDetail:
-    """One capture, with headers, query and body."""
-    return RequestDetail.from_model(await _load(session, endpoint, request_id))
+    """One capture, with headers, query, body and signature verdict."""
+    captured, check = await _load(session, endpoint, request_id)
+    return RequestDetail.from_model(captured, check)
 
 
 @router.get("/{request_id}/body")
@@ -93,7 +103,7 @@ async def download_body(
     So: always octet-stream, always an attachment, plus `nosniff` to stop the
     browser second-guessing the type from the bytes.
     """
-    captured = await _load(session, endpoint, request_id)
+    captured, _ = await _load(session, endpoint, request_id)
 
     return Response(
         content=captured.body_raw or b"",
