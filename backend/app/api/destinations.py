@@ -1,14 +1,16 @@
 """Managing where an endpoint's captures get forwarded."""
 
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.api.deps import EndpointDep, SessionDep
 from app.models import Destination
-from app.schemas.destination import DestinationCreate, DestinationPublic
+from app.schemas.destination import DestinationCreate, DestinationPublic, VerificationResult
 from app.security.ssrf import UnsafeTarget, validate
+from app.services.verification import verify_destination
 
 router = APIRouter(prefix="/api/endpoints/{view_token}/destinations", tags=["destinations"])
 
@@ -100,6 +102,42 @@ async def _load(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Destination not found")
 
     return destination
+
+
+@router.post("/{destination_id}/verify", response_model=VerificationResult)
+async def verify(
+    destination_id: uuid.UUID,
+    endpoint: EndpointDep,
+    session: SessionDep,
+) -> VerificationResult:
+    """Challenge the destination, and enable forwarding if it answers correctly.
+
+    The address is validated again here rather than trusting the check made when
+    the destination was registered. DNS may have changed in between -- innocently,
+    or because someone is waiting for exactly this moment -- and the check that
+    matters is always the one immediately before the connection.
+
+    Answers 200 with `verified: false` and an explanation when the challenge
+    fails. It is not a client error: the request was fine and the destination
+    simply is not ready, and the user needs to read why.
+    """
+    destination = await _load(session, endpoint, destination_id)
+
+    try:
+        target = validate(destination.target_url)
+    except UnsafeTarget as exc:
+        return VerificationResult(verified=False, detail=str(exc))
+
+    outcome = await verify_destination(
+        target, destination.verification_token, destination.timeout_ms
+    )
+
+    if outcome.verified:
+        destination.verified_at = datetime.now(UTC)
+        session.add(destination)
+        await session.commit()
+
+    return VerificationResult(verified=outcome.verified, detail=outcome.detail)
 
 
 @router.delete("/{destination_id}", status_code=status.HTTP_204_NO_CONTENT)
