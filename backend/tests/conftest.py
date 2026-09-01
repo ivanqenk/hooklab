@@ -35,7 +35,10 @@ async def clean_state() -> AsyncIterator[None]:
 
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE signature_checks, requests, endpoints RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE deliveries, destinations, signature_checks, requests, endpoints "
+                "RESTART IDENTITY CASCADE"
+            )
         )
 
     # Only the endpoint streams, never FLUSHDB: the tests share this Redis with
