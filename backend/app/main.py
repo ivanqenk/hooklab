@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI, Response
 from sqlalchemy import text
 
-from app.api import destinations, endpoints, ingest, requests, stream
+from app.api import deliveries, destinations, endpoints, ingest, requests, stream
 from app.core.config import get_settings
 from app.core.db import engine
 from app.core.redis import redis
@@ -18,6 +18,7 @@ app = FastAPI(title="Hooklab", version="0.1.0")
 app.include_router(endpoints.router)
 app.include_router(requests.router)
 app.include_router(destinations.router)
+app.include_router(deliveries.router)
 app.include_router(stream.router)
 app.include_router(ingest.router)
 

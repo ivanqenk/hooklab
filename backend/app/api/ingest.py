@@ -18,6 +18,7 @@ from app.services.capture import (
     parse_json_body,
     read_body_with_limit,
 )
+from app.worker.delivery import enqueue
 
 # No prefix: the ingest URL is pasted into third-party configuration panels, so
 # every character counts. It is also excluded from the OpenAPI schema -- seven
@@ -126,6 +127,11 @@ async def _capture(
     check = _check_signature(endpoint, captured)
     if check is not None:
         session.add(check)
+
+    # Queued inside the same transaction as the capture, so a rollback can never
+    # leave a delivery pointing at a request that does not exist. Only verified
+    # destinations get one; the worker picks them up from there.
+    await enqueue(session, captured)
 
     await session.commit()
 
