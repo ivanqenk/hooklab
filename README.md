@@ -16,8 +16,8 @@ Hooklab gives you a public URL where every request is **captured and appears liv
 provider **signature verified** with an explanation of *why* it failed when it does, and is
 **forwarded** to your destination with retries and exponential backoff.
 
-> **Status: under construction.** Capture, the live feed and signature verification work today —
-> you can use Hooklab from `curl` with no frontend. Reliable forwarding is next.
+> **Status: backend complete, no frontend yet.** Capture, the live feed, signature verification and
+> reliable forwarding all work today, driven from `curl`. The web interface is next.
 
 ## Requirements
 
@@ -101,6 +101,38 @@ That sentence is the feature. Every other tool tells you `invalid` — which you
 
 The secret is **write-only**: encrypted at rest and returned by no route, in any form.
 
+## Forward with retries
+
+Register a destination and prove you control it. Nothing is forwarded until you do — otherwise
+Hooklab would be a free amplifier anyone could aim at a stranger's server.
+
+```bash
+# 1. Register. Comes back unverified, with a challenge token.
+curl -X POST localhost:8010/api/endpoints/<view_token>/destinations \
+  -H 'content-type: application/json' -d '{"target_url":"https://my-app.example/hooks"}'
+
+# 2. Make your server answer with exactly that token when a request carries
+#    the x-hooklab-verification header, then:
+curl -X POST localhost:8010/api/endpoints/<view_token>/destinations/<id>/verify
+
+# 3. Run the worker beside the API.
+.venv/bin/python -m app.worker.run
+```
+
+From then on every capture is forwarded, retried with exponential backoff and jitter, and ends up
+either delivered or in the dead-letter state where you can retry it by hand:
+
+```bash
+curl localhost:8010/api/endpoints/<view_token>/deliveries?state=exhausted
+curl -X POST localhost:8010/api/endpoints/<view_token>/deliveries/<id>/retry
+```
+
+Delivery is **at-least-once, not exactly-once** — that is a property of HTTP, not a shortcut. When a
+request times out there is no way to tell whether the destination processed it and the reply was
+lost, or whether it never arrived. Retrying risks a duplicate; not retrying risks a loss. Hooklab
+retries, and sends a `X-Hooklab-Idempotency-Key` that stays identical across every attempt so the
+receiver can recognise the repeat.
+
 ## Quality
 
 ```bash
@@ -161,6 +193,21 @@ timestamp prefix, an event replayed outside the tolerance window, a signature he
 arrived. Naming which one it was is the difference between a five-second fix and an afternoon.
 Hooklab can also give a diagnosis nobody else can: when it truncated the body at its own size limit,
 the HMAC cannot match, and blaming the secret would be actively misleading.
+
+**Validate the resolved address, never the hostname.** `evil.com` is free to resolve to
+`127.0.0.1`, so a blocklist of names stops nobody. Every address a name resolves to must pass, and
+the connection is then opened to that exact IP with the original hostname sent as `Host` and TLS
+SNI — letting the HTTP client resolve a second time reopens the DNS-rebinding window the check just
+closed. The standard library's own categories are not enough on their own: `is_private` misses
+carrier-grade NAT, and `is_global` returns True for multicast *and* for `64:ff9b::/96`, the NAT64
+prefix that carries an IPv4 address in its low 32 bits — so `64:ff9b::7f00:1` reaches `127.0.0.1`.
+
+**The delivery queue is Postgres, not a task queue.** Everything a job queue would hold — when the
+next attempt is due, how many have been made, what failed last time — already has to live in a table
+because the UI shows it. Running a second scheduler alongside would mean two answers that can
+disagree, and the one users see would be the wrong one. `SELECT ... FOR UPDATE SKIP LOCKED` gives a
+queue over the table that already exists, and lets several workers run without either serialising
+or double-sending.
 
 **Two separate tokens.** The ingest token is public and ends up in logs and screenshots; the view
 token is secret and is the only one that can *read* the traffic. With a single token, anyone who

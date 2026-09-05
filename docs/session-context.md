@@ -1,7 +1,7 @@
 # Session context — Hooklab
 
 A document for picking the project back up without re-reading the whole previous conversation.
-**Last updated: 2026-08-27.**
+**Last updated: 2026-09-04.**
 
 ---
 
@@ -22,8 +22,9 @@ A webhook gateway for development. You generate a public URL, and every request 
 
 ## 2. Exactly where we are
 
-**Latest commit: `HL-18`.** Branch `main` in sync, CI green.
-**Phases 1, 2 and 3 are complete: Hooklab captures, streams live and verifies signatures.**
+**Latest commit: `HL-24`.** Branch `main` in sync, CI green.
+**Phases 1 to 4 are complete: Hooklab captures, streams live, verifies signatures and forwards
+reliably.** The backend is feature-complete for its own purposes; what is left is a face for it.
 
 | Commit | Contents |
 |---|---|
@@ -43,6 +44,12 @@ A webhook gateway for development. You generate a public URL, and every request 
 | HL-16 | **Phase 3**: Stripe and GitHub signature verifiers |
 | HL-17 | Signature verification wired end to end |
 | HL-18 | Documentation updated after phase 3 |
+| HL-19 | **Phase 4**: SSRF defence |
+| HL-20 | Retry policy: exponential backoff with jitter |
+| HL-21 | Forwarding destinations, unverified on creation |
+| HL-22 | Destination verification and the IP-pinned HTTP client |
+| HL-23 | Delivery worker: retries, dead letters, circuit breaker |
+| HL-24 | Documentation updated after phase 4 |
 
 ### Works and is verified
 
@@ -61,15 +68,20 @@ A webhook gateway for development. You generate a public URL, and every request 
 - **Signature verification**: `PUT /api/endpoints/{view_token}/signature` turns it on, and every
   capture is checked inline. The verdict travels in the listing, the detail and the live feed.
   Verified by hand against a real server with all six Stripe cases, each giving its own diagnosis.
-- 99 tests against real services, isolated by `TRUNCATE` between each one. The signature tests are
-  anchored on GitHub's own published vector and were validated with deliberate mutations.
+- **Reliable forwarding**: register a destination, prove you control it, and every capture is
+  forwarded with retries, exponential backoff, a stable idempotency key, a dead-letter state and a
+  circuit breaker. The worker runs as its own process (`python -m app.worker.run`) and shuts down
+  cleanly on SIGTERM rather than dying mid-delivery.
+- 217 tests against real services, isolated by `TRUNCATE` between each one. The signature tests are
+  anchored on GitHub's own published vector; the signature, SSRF and worker suites were each
+  validated with deliberate mutations to prove they fail when the code breaks.
 - CI: Python 3.12 and 3.14 matrix, with Postgres and Redis as services, running `ruff`,
   `ruff format --check`, `mypy`, migrations and `pytest`.
 - Also verified by hand with `curl` against the real server.
 
 ### Missing
 
-Forwarding, frontend and deployment.
+Frontend, accounts and deployment.
 
 ---
 
@@ -169,6 +181,34 @@ Things that already cost time once. No need to trip over them again.
   connections. It uses `DetachedEndpointDep` and opens its own session only for the backfill.
 - **`ready` is sent after the backfill**, so it means "you are caught up" and not just "socket
   open".
+- **The signing secret is write-only**, encrypted with AES-GCM and returned by no route.
+- **Nothing is forwarded to an unverified destination.** The SSRF rules stop Hooklab being aimed at
+  *our* network; they do nothing about it being aimed at a stranger's site, which would make us a
+  free amplifier. The destination has to echo a token back to prove someone controls it.
+- **The echo must be the token exactly, not merely contain it.** A public request-reflecting service
+  returns the challenge header inside a JSON blob, so a "contains" rule would let anyone verify a
+  destination they do not own.
+- **Addresses are validated against the resolved IP, never the hostname string**, and every address
+  a name resolves to has to pass. Obfuscated forms (`127.1`, `2130706433`, `0x7f000001`) are covered
+  for free, since what is judged is what the resolver returned.
+- **Connect to the validated IP, sending the original hostname as `Host` and SNI.** Letting the HTTP
+  client resolve again reopens the DNS-rebinding window that the check just closed.
+- **The stdlib's own address categories are not enough.** `is_private` misses carrier-grade NAT and
+  multicast; `is_global` is True for multicast *and* for `64:ff9b::/96`, the NAT64 prefix that
+  carries an IPv4 address in its low bits. IPv4 embedded in IPv6 is unwrapped in all three forms
+  before any category is applied.
+- **No redirects are followed.** The new address never passed the checks, and following one is the
+  classic way to walk an SSRF filter into the internal network.
+- **The delivery queue is Postgres with `SKIP LOCKED`, not ARQ** -- a deliberate departure from the
+  plan. Everything a task queue would hold already has to live in `deliveries` for the UI, and a
+  second schedule in Redis could disagree with the one users see.
+- **The address is revalidated immediately before connecting**, never trusted from registration
+  time.
+- **`idempotency_key` is stable across retries.** At-least-once delivery is unavoidable over HTTP;
+  a key that changed per attempt would be useless to the receiver, and that is the easy mistake.
+- **A 4xx other than 408/429 exhausts the delivery at once** instead of spending eight attempts
+  repeating a refusal and hiding a permanent problem behind "pending".
+- **A failed signature or a failed delivery never costs the capture.** Ingest still answers 200.
 - **The signing secret is write-only**: encrypted with AES-GCM at rest and returned by no route, in
   no form. Not masked -- absent. A masked value still leaks its length and invites someone to "show
   just a few characters" later.
@@ -200,54 +240,60 @@ Things that already cost time once. No need to trip over them again.
 
 ---
 
-## 6. What comes next — phase 4: reliable delivery
+## 6. What comes next — phase 5: the frontend
 
-The part that makes this an engineering project rather than a CRUD.
+The backend does everything it was designed to do. What is missing is a face, and
+`docs/master-prompt.md` is clear that a modest thing people can use beats an ambitious one at 60%.
 
-1. **Destinations per endpoint**, and forwarding only to **verified** ones, for accounts only.
-   Blocking private ranges stops attacks on *our* network; it does not stop someone using Hooklab to
-   attack a third party. Verification is a request carrying a token the destination must echo back.
-   It also happens to be the natural reason to sign up.
-2. **SSRF defence is the hard part** — resolve the hostname once, validate **every** resolved
-   address, then connect to that IP while passing the original `Host` and SNI. Validating the string
-   and letting the HTTP client resolve again leaves a window for DNS rebinding. `::ffff:0:0/96`
-   (IPv4-mapped IPv6) is the bypass everyone forgets. No redirects, http/https only.
-3. **Exponential backoff with jitter.** Without jitter, 500 deliveries that failed together retry in
-   the same instant and knock the destination over again.
-4. **At-least-once, not exactly-once** -- impossible over HTTP. A stable `idempotency_key` across
-   retries lets the receiver deduplicate. This goes in the README: understanding why exactly-once
-   does not exist is worth more than any feature.
-5. **Dead-letter queue and circuit breaker**: after N attempts a delivery is exhausted and stays
-   visible and manually retryable; a destination that keeps failing gets paused rather than hammered.
+React + TypeScript + Tailwind, as chosen at the start. The parts that will actually be awkward are
+already known and written down in the plan:
 
-Testing this needs the clock injected as a dependency. Sleeping through exponential backoff is the
-difference between a two-second suite and a twenty-minute one.
+1. **`EventSource` vs `fetch` streaming.** `EventSource` reconnects and resends `Last-Event-ID` for
+   free, but cannot send custom headers. While the view token lives in the URL it is the right
+   choice; when accounts arrive and the token moves to an Authorization header, this has to become
+   `fetch` + `ReadableStream` with the resume handled by hand. A conscious decision, not an accident.
+2. **StrictMode mounts effects twice in development.** Without correct cleanup that means two live
+   connections and duplicated events -- a ghost that does not exist in production.
+3. **Backpressure.** Ten thousand captures cannot accumulate in React state. A sliding window in
+   memory plus the existing cursor pagination going backwards.
+4. **Batch the renders.** One `setState` per event dies under real traffic; buffer and flush about
+   every 100 ms.
+5. **Stored XSS is the real risk here.** The page renders attacker-written content: bodies, headers,
+   names. `dangerouslySetInnerHTML` over captured content is forbidden, previews go in a sandboxed
+   iframe without `allow-same-origin`, and `Referrer-Policy: no-referrer` stops the view token
+   leaking through a link inside a payload.
 
-After that: frontend → accounts → deployment.
+After that: accounts (phase 6), then deployment.
 
 ### Known gaps, deliberately left
 
-- **Captures taken before a secret was configured are never verified.** The natural flow is to
-  configure first, but "wrong secret, fix it, re-check what I already captured" is a real one. The
-  data model already supports it: `signature_checks` keys on `request_id`, so re-verification is an
-  upsert over one endpoint's rows.
-- **Only Stripe and GitHub.** Shopify (base64 rather than hex) and Twilio (HMAC-SHA1 over the URL
-  plus sorted parameters) are next; the interface in `app/services/signatures/base.py` is what they
-  plug into.
+- **Captures taken before a secret was configured are never verified.** The data model supports
+  re-verification -- `signature_checks` keys on `request_id` -- so it is an upsert away.
+- **Only Stripe and GitHub sign.** Shopify (base64) and Twilio (HMAC-SHA1 over URL plus sorted
+  parameters) plug into the same interface.
+- **Forwarding requires a verified destination but not yet an account.** The plan wanted both;
+  verification is the half that actually proves control, and the account gate layers on in phase 6
+  without rework.
+- **No retention worker yet.** Anonymous endpoints carry `expires_at` but nothing deletes them.
 
 ### Traps already paid for, worth not stepping on again
 
 - **httpx's `ASGITransport` does not stream**: it runs the app to completion and concatenates the
-  whole body. Against an infinite SSE feed it hangs forever. That is why `tests/sse.py` speaks ASGI
-  directly.
+  body, so it hangs forever against an SSE feed. `tests/sse.py` speaks ASGI directly instead.
 - **pytest-asyncio creates one event loop per test**, and the global Redis client kept connections
-  belonging to the previous, now-closed loop. It surfaces as `Event loop is closed` during the
-  *setup* of an innocent test. Solved by disconnecting the pool at the end of each test in
-  `conftest.py`.
-- **Killing the uvicorn master does not kill the workers**, and their command line does not match
-  `pgrep -f 'uvicorn app.main'`. They have to be killed by PID or by process group.
-- **`ruff`'s S105/S106 fire on every test vector**, since a fake credential looks exactly like a real
-  one. Ignored for `tests/` only; still enforced in `app/`.
+  from the previous, closed one. It surfaces as `Event loop is closed` during the *setup* of an
+  innocent test. The pool is disconnected at the end of each test in `conftest.py`.
+- **Killing the uvicorn master does not kill its workers**, and their command line does not match
+  `pgrep -f 'uvicorn app.main'`.
+- **`pgrep -f` matches the invoking shell's own command line.** This has cost time three separate
+  times. Capture the PID from `$!` at launch instead of searching for it afterwards; a bracket
+  pattern only helps when the shell does not also contain the literal string.
+- **Every test needs Postgres**, because the autouse fixture truncates. Without the container up,
+  even the pure unit tests fail -- after minutes of connection retries.
+- **`ruff`'s B008 exemption for FastAPI recognises built-in parameter types but not our own enums.**
+  The fix is the `Annotated` alias form, which is modern FastAPI style anyway.
+- **`.example` hostnames do not resolve**, so any test that goes through destination registration
+  waits on DNS and then fails validation.
 
 ---
 
