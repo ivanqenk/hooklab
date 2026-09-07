@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+/* Tailwind 4 configures itself from CSS: no tailwind.config.js, and the theme is
+   declared here rather than in JavaScript. */
+@theme {
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+html {
+  color-scheme: light dark;
+}

@@ -1,0 +1,32 @@
+{
+  /* Tests are checked separately from the application.
+
+     The app's config deliberately exposes only `vite/client`: application code
+     runs in a browser and has no business reaching for `node:fs`. Widening it to
+     keep one test compiling would hand every component an API it must not use,
+     and TypeScript would stop catching that. So the tests get their own project
+     instead, with Node available and the same strictness. */
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "types": ["node", "vitest/globals"],
+    "skipLibCheck": true,
+
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

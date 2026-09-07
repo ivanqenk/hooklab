@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!--
+      The view token is the credential and it lives in the URL. This page renders
+      content written by whoever sent the webhook, so if a link ever escaped into
+      the markup, clicking it would hand the full URL -- token included -- to the
+      attacker's server in the Referer header. Nothing here renders captured
+      content as a link, and this makes the leak impossible even if something
+      later does.
+    -->
+    <meta name="referrer" content="no-referrer" />
+
+    <title>Hooklab</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

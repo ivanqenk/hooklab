@@ -90,3 +90,34 @@ jobs:
 
       - name: Tests
         run: pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Linter
+        run: npx oxlint src
+
+      # `tsc -b` builds all three projects: the app, the Vite config and the
+      # tests. The app deliberately has no Node types, so a component reaching
+      # for node:fs fails here.
+      - name: Types and build
+        run: npm run build
+
+      - name: Tests
+        run: npm test
