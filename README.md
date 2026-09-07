@@ -23,7 +23,7 @@ provider **signature verified** with an explanation of *why* it failed when it d
 ## Requirements
 
 - Python 3.12 or newer
-- Node 20 or newer
+- Node 22.12 or newer (CI runs 24)
 - Docker and Docker Compose
 
 ## Getting started
