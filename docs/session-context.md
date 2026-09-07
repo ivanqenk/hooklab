@@ -1,7 +1,7 @@
 # Session context — Hooklab
 
 A document for picking the project back up without re-reading the whole previous conversation.
-**Last updated: 2026-09-04.**
+**Last updated: 2026-09-07.**
 
 ---
 
@@ -22,9 +22,12 @@ A webhook gateway for development. You generate a public URL, and every request 
 
 ## 2. Exactly where we are
 
-**Latest commit: `HL-24`.** Branch `main` in sync, CI green.
-**Phases 1 to 4 are complete: Hooklab captures, streams live, verifies signatures and forwards
-reliably.** The backend is feature-complete for its own purposes; what is left is a face for it.
+**Phases 1 to 5 are complete: Hooklab captures, streams live, verifies signatures, forwards
+reliably — and all of it is now driveable from the browser.** Someone can open the page, get a URL,
+paste a signing secret, register a destination and watch the whole thing work without touching a
+terminal. That was the bar for phase 5 and it is met.
+
+What remains is not a feature of the gateway: accounts (phase 6) and deployment (phase 7).
 
 | Commit | Contents |
 |---|---|
@@ -50,6 +53,8 @@ reliably.** The backend is feature-complete for its own purposes; what is left i
 | HL-22 | Destination verification and the IP-pinned HTTP client |
 | HL-23 | Delivery worker: retries, dead letters, circuit breaker |
 | HL-24 | Documentation updated after phase 4 |
+| HL-25 | **Phase 5**: the frontend, with the live feed |
+| HL-26 | Signature and destination settings in the UI; documentation updated after phase 5 |
 
 ### Works and is verified
 
@@ -72,16 +77,26 @@ reliably.** The backend is feature-complete for its own purposes; what is left i
   forwarded with retries, exponential backoff, a stable idempotency key, a dead-letter state and a
   circuit breaker. The worker runs as its own process (`python -m app.worker.run`) and shuts down
   cleanly on SIGTERM rather than dying mid-delivery.
-- 217 tests against real services, isolated by `TRUNCATE` between each one. The signature tests are
-  anchored on GitHub's own published vector; the signature, SSRF and worker suites were each
-  validated with deliberate mutations to prove they fail when the code breaks.
+- **The browser interface**: create an endpoint, copy the ingest URL, watch captures arrive live,
+  read one in full — headers, query, pretty-printed body, signature verdict, delivery outcomes.
+- **Settings in the UI**: paste a signing secret to turn verification on, register a destination,
+  run its verification challenge, and retry a dead delivery. Everything phases 3 and 4 built is now
+  reachable without `curl`, which is what phase 5 was for.
+- 217 backend tests against real services, isolated by `TRUNCATE` between each one, plus 62
+  frontend tests. The signature tests are anchored on GitHub's own published vector; the signature,
+  SSRF, worker, `destinationStatus` and XSS-rule suites were each validated with deliberate
+  mutations to prove they fail when the code breaks.
 - CI: Python 3.12 and 3.14 matrix, with Postgres and Redis as services, running `ruff`,
-  `ruff format --check`, `mypy`, migrations and `pytest`.
-- Also verified by hand with `curl` against the real server.
+  `ruff format --check`, `mypy`, migrations and `pytest`; plus a frontend job running the linter,
+  types, build and tests.
+- Also verified by hand against the real server: signature verdicts on a valid and an invalid
+  Stripe signature, an SSRF rejection naming the rule it broke, a verification challenge failing
+  with instructions, and a delivery going exhausted and then back to `pending` through retry —
+  through the Vite proxy as well as directly.
 
 ### Missing
 
-Frontend, accounts and deployment.
+Accounts and deployment.
 
 ---
 
@@ -96,6 +111,19 @@ cd backend
 .venv/bin/uvicorn app.main:app --port 8010 --reload
 
 curl http://localhost:8010/ready     # {"status":"ready","checks":{...}}
+
+cd ../frontend
+npm run dev                          # http://localhost:5173, proxying to 8010
+```
+
+The frontend needs the backend up on 8010. The Vite proxy forwards `/api` and `/in`, so the browser
+sees a single origin and CORS never enters the picture — which matters most for SSE, where a CORS
+mistake opens the connection and then silently delivers nothing.
+
+The delivery worker is a separate process and is not started by any of the above:
+
+```bash
+cd backend && .venv/bin/python -m app.worker.run
 ```
 
 Before every commit, run **exactly what CI runs**:
@@ -106,6 +134,11 @@ cd backend
 .venv/bin/ruff format --check app/ tests/ scripts/
 .venv/bin/mypy app/ tests/ scripts/
 .venv/bin/pytest -q
+
+cd ../frontend
+npx oxlint src
+npm run build                        # tsc -b is the type check
+npm test
 ```
 
 Watch the live feed by hand:
@@ -231,6 +264,40 @@ Things that already cost time once. No need to trip over them again.
   async SQLAlchemy fires a query from wherever it is touched, including inside the response
   serialiser, long after the session is gone.
 
+#### Frontend
+
+- **The view token lives in the URL fragment**, not a path segment or a query string. Fragments are
+  never sent to a server, so it stays out of access logs and out of every proxy in between.
+- **`EventSource`, not `fetch` streaming — for now.** It reconnects and resends `Last-Event-ID` for
+  free, but cannot send custom headers. When accounts move the token into an `Authorization` header
+  this has to become `fetch` + `ReadableStream` with the resume handled by hand.
+- **History and the live feed open together, not in sequence.** Fetching the page first and
+  subscribing after leaves a window whose events are lost silently. The overlap costs a duplicate,
+  which is filtered; the gap costs a capture, which is not detectable.
+- **Components are mounted with a `key` per endpoint and per capture**, rather than resetting state
+  inside an effect. It removes the extra render and, more importantly, the window in which one
+  endpoint's state is visible against another's data.
+- **A static test enforces the rendering rules** (`src/xss.test.ts`): no `dangerouslySetInnerHTML`,
+  `innerHTML` or `srcdoc`; no `href` that our own API client did not build; no `localStorage`,
+  `sessionStorage` or `document.cookie`. The page renders attacker-written content while the URL
+  carries the view token, so the plausible future change — "pretty-print the body", "remember my
+  endpoints" — is exactly what has to fail loudly.
+- **Destination URLs are shown as text, never as links.** They are the user's own rather than an
+  attacker's, so this is the weaker case — but any outbound link leaks the view token in `Referer`,
+  and one rule is kept where two are not.
+- **Backend error sentences are shown verbatim**, unwrapped from FastAPI's `{"detail": …}` envelope
+  by `errorDetail`. Those sentences — which SSRF rule an address broke, why a challenge failed, what
+  to change about a secret — are the product. A pydantic validation *list* is our bug rather than
+  the user's, so it collapses to the status text instead.
+- **The signing secret has no field to read back into.** It is write-only at the backend, so the
+  form says "stored — type a new one to replace it" rather than rendering dots that suggest an
+  editable value, and the typed value is dropped from React state the moment it is sent.
+- **Settings live in an overlay, not a third column.** The list and the detail are what someone
+  stares at while debugging; settings are touched once per endpoint.
+- **Reloads are a key bump, not a function that writes state.** The effect owns every write and
+  carries the `live` guard, so a response arriving after a panel closed cannot land in state that no
+  longer belongs to it.
+
 ### Discarded ideas — do not propose them again
 
 - **Acredia** (contractor compliance in Mexico): regulatory dependency, incumbents that sell it
@@ -240,41 +307,48 @@ Things that already cost time once. No need to trip over them again.
 
 ---
 
-## 6. What comes next — phase 5: the frontend
+## 6. What comes next — phase 6: accounts
 
-The backend does everything it was designed to do. What is missing is a face, and
-`docs/master-prompt.md` is clear that a modest thing people can use beats an ambitious one at 60%.
+Hooklab works and can be demonstrated to someone in a browser. What it cannot do is let that person
+come back tomorrow: an endpoint is reachable only through the link in the address bar, and it
+expires in 72 hours.
 
-React + TypeScript + Tailwind, as chosen at the start. The parts that will actually be awkward are
-already known and written down in the plan:
+The design already anticipates this — endpoints are **anonymous first and claimable later**, so
+accounts add an owner rather than replacing the capability model. The parts that will actually be
+awkward:
 
-1. **`EventSource` vs `fetch` streaming.** `EventSource` reconnects and resends `Last-Event-ID` for
-   free, but cannot send custom headers. While the view token lives in the URL it is the right
-   choice; when accounts arrive and the token moves to an Authorization header, this has to become
-   `fetch` + `ReadableStream` with the resume handled by hand. A conscious decision, not an accident.
-2. **StrictMode mounts effects twice in development.** Without correct cleanup that means two live
-   connections and duplicated events -- a ghost that does not exist in production.
-3. **Backpressure.** Ten thousand captures cannot accumulate in React state. A sliding window in
-   memory plus the existing cursor pagination going backwards.
-4. **Batch the renders.** One `setState` per event dies under real traffic; buffer and flush about
-   every 100 ms.
-5. **Stored XSS is the real risk here.** The page renders attacker-written content: bodies, headers,
-   names. `dangerouslySetInnerHTML` over captured content is forbidden, previews go in a sandboxed
-   iframe without `allow-same-origin`, and `Referrer-Policy: no-referrer` stops the view token
-   leaking through a link inside a payload.
+1. **Claiming, not migrating.** Signing up has to adopt the endpoints already open in that tab,
+   otherwise the first thing an account does is lose the user's work.
+2. **The view token stops being the credential**, and that is what forces `EventSource` out. A token
+   in an `Authorization` header cannot be sent by `EventSource` at all, so the live feed becomes
+   `fetch` + `ReadableStream` with the `Last-Event-ID` resume handled by hand. This is written down
+   in the frontend decisions above precisely so it is not a surprise here.
+3. **Two access models coexisting.** Anonymous endpoints keep working while owned ones exist, so
+   `EndpointDep` grows a second path rather than swapping its only one. That dependency is the one
+   place access control lives; it stays that way.
+4. **Expiry becomes a real policy**, which needs the retention worker that does not exist yet.
 
-After that: accounts (phase 6), then deployment.
+After that: deployment (phase 7) — VPS with Docker Compose and Caddy, as decided.
 
 ### Known gaps, deliberately left
 
 - **Captures taken before a secret was configured are never verified.** The data model supports
-  re-verification -- `signature_checks` keys on `request_id` -- so it is an upsert away.
+  re-verification -- `signature_checks` keys on `request_id` -- so it is an upsert away. The UI says
+  so plainly when a secret is saved rather than leaving the old captures looking unsigned.
 - **Only Stripe and GitHub sign.** Shopify (base64) and Twilio (HMAC-SHA1 over URL plus sorted
-  parameters) plug into the same interface.
+  parameters) plug into the same interface. The provider list is also hardcoded as a union in
+  `frontend/src/api/types.ts`, so adding one means touching both sides.
 - **Forwarding requires a verified destination but not yet an account.** The plan wanted both;
   verification is the half that actually proves control, and the account gate layers on in phase 6
   without rework.
 - **No retention worker yet.** Anonymous endpoints carry `expires_at` but nothing deletes them.
+- **A destination cannot be edited, only added and removed.** `extra_headers`, `timeout_ms` and
+  `max_attempts` are settable through the API but have no UI, and default sensibly.
+- **The list does not page backwards.** The sliding window keeps the newest captures and the cursor
+  pagination exists in the API, but nothing in the UI walks off the end of the window yet.
+- **`paused_until` is not live.** A destination's status is computed when the panel renders, so a
+  circuit-breaker pause that elapses while the panel is open still reads as paused until something
+  reloads it.
 
 ### Traps already paid for, worth not stepping on again
 
@@ -294,6 +368,15 @@ After that: accounts (phase 6), then deployment.
   The fix is the `Annotated` alias form, which is modern FastAPI style anyway.
 - **`.example` hostnames do not resolve**, so any test that goes through destination registration
   waits on DNS and then fails validation.
+- **A destination cannot be verified against `localhost`**, by design — the SSRF rules reject it
+  before the challenge is ever sent. To exercise the delivery path locally, register a public URL
+  and set `verified_at` directly in Postgres; that is what the by-hand check of phase 5 did.
+- **`npm run build` is the type check.** `npx tsc` alone does the wrong thing here: there are three
+  TypeScript projects and only `tsc -b` builds them all, so a type error in a test can survive a
+  check that looked like it passed.
+- **oxlint's `set-state-in-effect` fires on `void load()` inside an effect**, even when the write
+  happens after an `await`. It was pointing at something real anyway — the missing `live` guard —
+  so the fix was the key-bump pattern rather than a suppression.
 
 ---
 
@@ -304,6 +387,7 @@ After that: accounts (phase 6), then deployment.
 | `~/.claude/plans/espera-sigamos-analizando-tiene-merry-karp.md` | **The full plan**: architecture with its 7 decisions, threat model, SQL data model, phases and verification plan. Primary reference. Still in Spanish — it is outside the repository. |
 | `docs/master-prompt.md` | Methodology: phases, approval gates, definition of done. |
 | `README.md` | Public face of the project and getting started. |
+| `frontend/README.md` | What to know before changing the frontend: the XSS rules, the SSE trade, the TypeScript project split. |
 | This file | State and context for picking the work back up. |
 
 **When picking it back up:** read this file, bring up the environment (section 3), confirm `/ready`

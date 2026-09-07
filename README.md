@@ -16,12 +16,14 @@ Hooklab gives you a public URL where every request is **captured and appears liv
 provider **signature verified** with an explanation of *why* it failed when it does, and is
 **forwarded** to your destination with retries and exponential backoff.
 
-> **Status: backend complete, no frontend yet.** Capture, the live feed, signature verification and
-> reliable forwarding all work today, driven from `curl`. The web interface is next.
+> **Status: usable end to end in the browser.** Capture, the live feed, signature verification and
+> reliable forwarding all work and are all driveable from the web interface. Accounts and deployment
+> are what remain.
 
 ## Requirements
 
 - Python 3.12 or newer
+- Node 20 or newer
 - Docker and Docker Compose
 
 ## Getting started
@@ -40,6 +42,11 @@ python -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 .venv/bin/alembic upgrade head
 .venv/bin/uvicorn app.main:app --port 8010 --reload
+
+# 4. Frontend, in another terminal
+cd frontend
+npm install
+npm run dev
 ```
 
 Check that it came up:
@@ -49,7 +56,13 @@ curl http://localhost:8010/health   # {"status":"ok"}
 curl http://localhost:8010/ready    # {"status":"ready","checks":{...}}
 ```
 
-Interactive API docs live at <http://localhost:8010/docs>.
+The interface is at <http://localhost:5173> and interactive API docs at
+<http://localhost:8010/docs>. The dev server proxies `/api` and `/in` to the backend, so the browser
+only ever sees one origin — no CORS in development, and the same shape as production behind a
+reverse proxy.
+
+Everything below can be done from that interface. It is shown with `curl` because the API is the
+contract, and because a copy-pasteable command is easier to read than a screenshot.
 
 ## Try it
 
@@ -76,6 +89,24 @@ id: 1
 event: request
 data: {"id": 1, "method": "POST", "path": "", "content_type": "application/json", ...}
 ```
+
+## The interface
+
+<http://localhost:5173> gives you the same thing without the terminal: press one button for an
+endpoint, copy the ingest URL into the provider's panel, and watch captures land. Selecting one
+shows its headers, query, pretty-printed body and signature verdict, plus what happened to it on
+the way to each destination. Settings is where you paste a signing secret and register somewhere to
+forward to.
+
+The view token lives in the URL **fragment**, which browsers never send to a server: it stays out
+of access logs and out of every proxy in between. Keep that link and you keep the endpoint.
+
+Because the page renders whatever the sender wrote — headers, bodies, paths — and the URL carries
+the view token, stored XSS is the risk that matters here. React escapes text by default, and a test
+walks the source and fails the build on `dangerouslySetInnerHTML`, `innerHTML`, `srcdoc`, on any
+`href` not built by our own API client, and on any use of `localStorage`, `sessionStorage` or
+`document.cookie`. A link built from a payload would hand the view token to a stranger in the
+`Referer` header.
 
 ## Verify a signature
 
@@ -141,6 +172,11 @@ cd backend
 .venv/bin/ruff format --check app/ tests/ scripts/
 .venv/bin/mypy app/ tests/ scripts/             # types
 .venv/bin/pytest -q                             # tests
+
+cd ../frontend
+npx oxlint src                                  # linter
+npm run build                                   # types, via tsc -b
+npm test                                        # tests
 ```
 
 Tests run against **real** Postgres and Redis rather than mocks. That is not purism: it is how a

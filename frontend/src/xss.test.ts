@@ -64,4 +64,24 @@ describe('the rendering rules that keep captured content inert', () => {
       }
     },
   )
+
+  it.each(files.map((path) => [path.replace(SOURCE_ROOT, ''), path]))(
+    '%s keeps credentials out of browser storage',
+    (_name, path) => {
+      // Two secrets pass through this app: the view token, which unlocks every
+      // capture, and the provider's signing secret. Neither is written anywhere
+      // that outlives the tab.
+      //
+      // "Remember my endpoints" is the entirely reasonable feature that
+      // introduces this, so the rule is worth stating rather than assuming. The
+      // token already survives in the URL fragment, which the user can see and
+      // clear; a copy in localStorage is one an XSS can read long afterwards and
+      // the user never knew existed.
+      const source = code(path)
+
+      expect(source).not.toContain('localStorage')
+      expect(source).not.toContain('sessionStorage')
+      expect(source).not.toContain('document.cookie')
+    },
+  )
 })

@@ -82,6 +82,43 @@ export interface EndpointPublic {
   signature_provider: string | null
 }
 
+/**
+ * The providers the backend knows how to verify.
+ *
+ * A union rather than `string`: the backend answers 422 for anything else, and
+ * catching that at compile time beats discovering it in a toast. Adding Shopify
+ * or Twilio means touching this line, which is the point -- the two lists cannot
+ * drift apart silently.
+ */
+export type SignatureProvider = 'stripe' | 'github'
+
+export interface Destination {
+  id: string
+  target_url: string
+  active: boolean
+  /** Nothing is forwarded until this is true. */
+  verified: boolean
+  /**
+   * Returned deliberately. It is a challenge, not a credential: it grants
+   * nothing on its own, and someone who cannot read it cannot configure their
+   * server to echo it back.
+   */
+  verification_token: string
+  extra_headers: Record<string, string> | null
+  timeout_ms: number
+  max_attempts: number
+  consecutive_failures: number
+  /** Set by the circuit breaker while a failing destination is being spared. */
+  paused_until: string | null
+  created_at: string
+}
+
+export interface VerificationResult {
+  verified: boolean
+  /** Why it failed, and what to change. Always worth showing verbatim. */
+  detail: string
+}
+
 export type DeliveryState = 'pending' | 'delivered' | 'failed' | 'exhausted'
 
 export interface Delivery {

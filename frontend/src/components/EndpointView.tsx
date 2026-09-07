@@ -8,12 +8,14 @@
  * effect that would otherwise cause a second render on every navigation.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { api } from '../api/client'
+import type { EndpointPublic } from '../api/types'
 import { useEventStream } from '../hooks/useEventStream'
 import { RequestDetail } from './RequestDetail'
 import { RequestList } from './RequestList'
+import { SettingsPanel } from './SettingsPanel'
 
 const STATUS_LABEL = {
   connecting: 'connecting…',
@@ -47,31 +49,59 @@ function IngestUrl({ url }: { url: string }) {
 }
 
 export function EndpointView({ viewToken }: { viewToken: string }) {
-  const [ingestUrl, setIngestUrl] = useState<string | null>(null)
+  const [endpoint, setEndpoint] = useState<EndpointPublic | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const { requests, status, missedTooMuch, reload } = useEventStream(viewToken)
 
-  // The ingest URL does not travel on the stream, so it is fetched once. No
-  // reset on the way in: a remount already guarantees it starts null.
+  // The endpoint itself does not travel on the stream, so it is fetched
+  // separately. `refreshEndpoint` exists because settings change it: configuring
+  // a secret flips `signature_provider`, and the panel has to see that rather
+  // than keep showing the state it opened with.
+  const [endpointVersion, setEndpointVersion] = useState(0)
+  const refreshEndpoint = useCallback(() => setEndpointVersion((n) => n + 1), [])
+
   useEffect(() => {
     let live = true
     api
       .getEndpoint(viewToken)
-      .then((endpoint) => live && setIngestUrl(endpoint.ingest_url))
+      .then((loaded) => live && setEndpoint(loaded))
       .catch(() => undefined)
     return () => {
       live = false
     }
-  }, [viewToken])
+  }, [viewToken, endpointVersion])
 
   return (
     <div className="flex h-screen flex-col bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <header className="flex items-center gap-3 border-b border-slate-200 px-4 py-2 dark:border-slate-800">
         <span className="shrink-0 text-sm font-semibold">Hooklab</span>
-        {ingestUrl && <IngestUrl url={ingestUrl} />}
+        {endpoint && <IngestUrl url={endpoint.ingest_url} />}
         <span className={`shrink-0 text-xs ${STATUS_TONE[status]}`}>{STATUS_LABEL[status]}</span>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          disabled={!endpoint}
+          className="shrink-0 rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-40 dark:border-slate-700"
+        >
+          Settings
+          {endpoint?.signature_provider && (
+            <span className="ml-1 text-emerald-600 dark:text-emerald-400">
+              · {endpoint.signature_provider}
+            </span>
+          )}
+        </button>
       </header>
+
+      {settingsOpen && endpoint && (
+        <SettingsPanel
+          viewToken={viewToken}
+          endpoint={endpoint}
+          onEndpointChanged={refreshEndpoint}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
 
       {missedTooMuch && (
         <div className="flex items-center gap-3 bg-amber-100 px-4 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">

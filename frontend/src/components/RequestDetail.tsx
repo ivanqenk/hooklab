@@ -77,35 +77,78 @@ function Body({ detail }: { detail: Detail }) {
   )
 }
 
-function Deliveries({ deliveries }: { deliveries: Delivery[] }) {
-  if (deliveries.length === 0) {
-    return <p className="text-sm text-slate-500">No destinations configured.</p>
+/**
+ * One forwarded delivery, with the button that puts a dead one back in the queue.
+ *
+ * A delivered one has no retry: sending it again would be a duplicate the
+ * receiver did not ask for. The backend refuses that with a 409 rather than
+ * trusting the button to be hidden, so this is the pleasant half of the rule
+ * rather than the enforcement.
+ */
+function DeliveryRow({
+  delivery,
+  target,
+  onRetry,
+}: {
+  delivery: Delivery
+  target: string | undefined
+  onRetry: () => Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function retry() {
+    setBusy(true)
+    setError(null)
+    try {
+      await onRetry()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not retry.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
-    <ul className="space-y-2 text-xs">
-      {deliveries.map((delivery) => (
-        <li key={delivery.id} className="font-mono">
-          <span className="font-semibold">{delivery.state}</span>
-          <span className="text-slate-500">
-            {' '}
-            · {delivery.attempts} attempt{delivery.attempts === 1 ? '' : 's'}
-            {delivery.last_status_code !== null && ` · HTTP ${delivery.last_status_code}`}
-          </span>
-          {delivery.last_error && (
-            <p className="mt-1 font-sans text-slate-600 dark:text-slate-400">
-              {delivery.last_error}
-            </p>
-          )}
-        </li>
-      ))}
-    </ul>
+    <li>
+      <div className="flex items-baseline gap-2">
+        <span className="font-mono text-xs font-semibold">{delivery.state}</span>
+        <span className="font-mono text-xs text-slate-500">
+          {delivery.attempts} attempt{delivery.attempts === 1 ? '' : 's'}
+          {delivery.last_status_code !== null && ` · HTTP ${delivery.last_status_code}`}
+        </span>
+        {delivery.state !== 'delivered' && (
+          <button
+            type="button"
+            onClick={() => void retry()}
+            disabled={busy}
+            className="ml-auto rounded border border-slate-300 px-2 py-0.5 text-xs disabled:opacity-40 dark:border-slate-700"
+          >
+            {busy ? 'Queueing…' : 'Retry'}
+          </button>
+        )}
+      </div>
+
+      {/* Text, never a link. The destination URL is the user's own, but the page
+          URL carries the view token and any outbound link leaks it in Referer. */}
+      {target && (
+        <p className="mt-0.5 break-all font-mono text-xs text-slate-500">{target}</p>
+      )}
+
+      {delivery.last_error && (
+        <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">{delivery.last_error}</p>
+      )}
+
+      {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
+    </li>
   )
 }
 
 export function RequestDetail({ viewToken, id }: { viewToken: string; id: number }) {
   const [detail, setDetail] = useState<Detail | null>(null)
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
+  /** Destination id to URL, so a delivery says where it went rather than a UUID. */
+  const [targets, setTargets] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
 
   // Mounted with a key, so a different capture is a different component: the
@@ -118,6 +161,22 @@ export function RequestDetail({ viewToken, id }: { viewToken: string; id: number
         if (!live) return
         setDetail(loaded)
         setDeliveries(sent)
+
+        // Fetched only when there is something to label. Clicking down a list of
+        // captures with no forwarding configured is the common case, and it
+        // should not cost a request per click.
+        //
+        // Deliberately not chained into the failure above: these are labels, and
+        // losing them must not turn a capture that loaded perfectly well into an
+        // error page.
+        if (sent.length === 0) return
+        api
+          .listDestinations(viewToken)
+          .then((registered) => {
+            if (!live) return
+            setTargets(Object.fromEntries(registered.map((each) => [each.id, each.target_url])))
+          })
+          .catch(() => undefined)
       })
       .catch(() => live && setError('Could not load this capture.'))
 
@@ -184,7 +243,27 @@ export function RequestDetail({ viewToken, id }: { viewToken: string; id: number
       )}
 
       <Section title="Deliveries">
-        <Deliveries deliveries={deliveries} />
+        {deliveries.length === 0 ? (
+          <p className="text-sm text-slate-500">
+            Not forwarded anywhere. Add a destination in settings to have captures sent on.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {deliveries.map((delivery) => (
+              <DeliveryRow
+                key={delivery.id}
+                delivery={delivery}
+                target={targets[delivery.destination_id]}
+                onRetry={async () => {
+                  const updated = await api.retryDelivery(viewToken, delivery.id)
+                  setDeliveries((current) =>
+                    current.map((each) => (each.id === updated.id ? updated : each)),
+                  )
+                }}
+              />
+            ))}
+          </ul>
+        )}
       </Section>
     </div>
   )
